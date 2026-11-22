@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Candlestick & Dip Paper Trading Bot</title>
+  <!-- TradingView Lightweight Charts Standalone Library -->
+  <script src="https://unpkg.com/lightweight-charts@4.2.1/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    :root {
+      --bg: #0e1117;
+      --card: #161b22;
+      --card-2: #1f2630;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #2f81f7;
+      --green: #00e676;
+      --red: #ff5252;
+      --yellow: #f0b90b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 20px;
+    }
+    .container { max-width: 1200px; margin: auto; }
+    h1, h2, h3 { margin: 0 0 10px 0; }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .badge {
+      padding: 5px 10px;
+      border-radius: 20px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      background: var(--card-2);
+      border: 1px solid var(--border);
+    }
+    .badge.open { color: var(--green); border-color: rgba(0,230,118,0.4); }
+    .badge.closed { color: var(--yellow); border-color: rgba(240,185,11,0.4); }
+    .grid-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 15px;
+      margin-bottom: 16px;
+    }
+    .stat-label { font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
+    .stat-val { font-size: 1.4rem; font-weight: 700; }
+    .pos { color: var(--green); }
+    .neg { color: var(--red); }
+
+    .controls-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: flex-end;
+    }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    label { font-size: 0.8rem; color: var(--muted); }
+    input[type="text"], input[type="password"], input[type="number"], select {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 9px 15px;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button:hover { opacity: 0.92; }
+    button.stop { background: var(--red); }
+    button.secondary { background: var(--card-2); border: 1px solid var(--border); }
+    button.sim { background: #6e40c9; }
+
+    .ticker-pills {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .pill {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--card-2);
+      border: 1px solid var(--border);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      user-select: none;
+    }
+    .pill.active {
+      border-color: var(--accent);
+      background: rgba(47, 129, 247, 0.15);
+    }
+    .pill input { accent-color: var(--accent); cursor: pointer; }
+
+    .main-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 900px) {
+      .main-grid { grid-template-columns: 1fr; }
+    }
+
+    #chartContainer {
+      width: 100%;
+      height: 390px;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+    }
+    th, td {
+      text-align: left;
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    th { color: var(--muted); font-weight: 600; }
+    #logs {
+      height: 240px;
+      overflow-y: auto;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+    .log-buy { color: var(--green); }
+    .log-sell { color: var(--red); }
+    .log-info { color: var(--muted); }
+    .log-signal { color: var(--yellow); }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div>
+      <h1>AI Dip & Candlestick Paper Trading Bot</h1>
+      <div style="font-size:0.85rem; color:var(--muted);">
+        Builds live 1-min candles • Trades bullish reversals on strong dips • Locked Watchlist
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <span id="marketBadge" class="badge closed">Checking Market...</span>
+      <span id="botStatusBadge" class="badge">Bot Idle</span>
+    </div>
+  </div>
+
+  <!-- Portfolio Summary Stats -->
+  <div class="grid-stats">
+    <div class="card" style="margin:0;">
+      <div class="stat-label">Total Portfolio Value</div>
+      <div class="stat-val" id="totalValue">$10,000.00</div>
+    </div>
+    <div class="card" style="margin:0;">
+      <div class="stat-label">Available Cash</div>
+      <div class="stat-val" id="cashValue">$10,000.00</div>
+    </div>
+    <div class="card" style="margin:0;">
+      <div class="stat-label">Total Return (P&L)</div>
+      <div class="stat-val" id="pnlValue">$0.00 (0.00%)</div>
+    </div>
+    <div class="card" style="margin:0;">
+      <div class="stat-label">Completed Trades</div>
+      <div class="stat-val" id="tradeCount">0</div>
+    </div>
+  </div>
+
+  <!-- API Key & Strategy Parameters -->
+  <div class="card">
+    <div class="controls-row">
+      <div class="field">
+        <label for="apiKey">Finnhub API Key (Saved Locally)</label>
+        <input type="password" id="apiKey" placeholder="Paste free Finnhub key" style="width:220px;" />
+      </div>
+      <div class="field">
+        <label for="dipThreshold">Min Dip Threshold (%)</label>
+        <input type="number" id="dipThreshold" step="0.05" value="0.35" style="width:110px;" />
+      </div>
+      <div class="field">
+        <label for="takeProfit">Take Profit (%)</label>
+        <input type="number" id="takeProfit" step="0.1" value="1.20" style="width:100px;" />
+      </div>
+      <div class="field">
+        <label for="stopLoss">Stop Loss (%)</label>
+        <input type="number" id="stopLoss" step="0.1" value="0.80" style="width:100px;" />
+      </div>
+      <div class="field">
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; color:var(--text); margin-bottom:8px;">
+          <input type="checkbox" id="autoMarketHours" checked />
+          Auto-Run During US Market Hours
+        </label>
+      </div>
+      <button id="toggleBotBtn" onclick="toggleBot()">Start Engine</button>
+      <button class="sim" onclick="simulateMarketTick()" title="Generates synthetic dip & hammer candle for testing when market is closed">Simulate Dip & Candle</button>
+      <button class="secondary" onclick="resetPortfolio()">Reset $10k</button>
+    </div>
+  </div>
+
+  <!-- Locked Watchlist Selection -->
+  <div class="card">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <div>
+        <strong>Select Stocks to Trade (Locked Watchlist)</strong>
+        <span style="font-size:0.82rem; color:var(--muted); margin-left:8px;">Check boxes to enable trading • Click ticker name to view chart</span>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="secondary" onclick="selectAllTickers(true)">Select All</button>
+        <button class="secondary" onclick="selectAllTickers(false)">Deselect All</button>
+      </div>
+    </div>
+    <div id="tickerPills" class="ticker-pills"></div>
+  </div>
+
+  <!-- Chart & Open Positions -->
+  <div class="main-grid">
+    <div class="card">
+      <div class="chart-header">
+        <div>
+          <strong style="font-size:1.1rem;" id="chartTitle">NVDA — Live 1m Candlestick Chart</strong>
+          <div style="font-size:0.82rem; color:var(--muted);" id="chartSub">
+            Green ▲ = Dip + Bullish Reversal Buy | Red ▼ = Target/Stop/Bearish Exit
+          </div>
+        </div>
+        <div>
+          <label for="chartSelect" style="margin-right:6px;">Chart Symbol:</label>
+          <select id="chartSelect" onchange="switchChartSymbol(this.value)"></select>
+        </div>
+      </div>
+      <div id="chartContainer"></div>
+    </div>
+
+    <div class="card">
+      <h3>Active Positions</h3>
+      <div style="max-height: 390px; overflow-y: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Symbol</th>
+              <th>Shares</th>
+              <th>Avg Cost</th>
+              <th>Last</th>
+              <th>P&L</th>
+            </tr>
+          </thead>
+          <tbody id="positionsBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Trade History & Decision Log -->
+  <div class="main-grid">
+    <div class="card">
+      <h3>AI Signal & Pattern Log</h3>
+      <div id="logs"></div>
+    </div>
+
+    <div class="card">
+      <h3>Recent Executed Trades</h3>
+      <div style="max-height: 240px; overflow-y: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th>Time</th>
+              <th>Action</th>
+              <th>Symbol</th>
+              <th>Price</th>
+              <th>Reason</th>
+            </tr>
+          </thead>
+          <tbody id="tradesBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const STORAGE_KEY = 'ai_candlestick_bot_v2';
+  // Fixed, locked list of approved tech, AI, and index fund tickers
+  const LOCKED_UNIVERSE = [
+    'NVDA', 'MU', 'TSLA', 'SPCX', 'GOOGL', 'META', 'AAPL', 'AVGO',
+    'QQQ', 'SPY', 'MSFT', 'AMZN', 'AMD', 'PLTR'
+  ];
+
+  // Persistent State
+  let state = {
+    apiKey: '',
+    initialCash: 10000,
+    cash: 10000,
+    enabledTickers: ['NVDA', 'AAPL', 'MSFT', 'GOOGL', 'META', 'AVGO', 'QQQ', 'SPY'],
+    allTickers: [...LOCKED_UNIVERSE],
+    selectedChartTicker: 'NVDA',
+    isBotEnabled: false,
+    autoMarketHours: true,
+    dipThreshold: 0.35,
+    takeProfit: 1.20,
+    stopLoss: 0.80,
+    positions: {}, 
+    candles: {},   
+    markers: {},   
+    trades: []     
+  };
+
+  let pollTimer = null;
+  let marketClockTimer = null;
+  let chart = null;
+  let candleSeries = null;
+
+  function loadState() {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        state = { ...state, ...parsed };
+      } catch (e) {
+        console.error('Failed to parse saved state:', e);
+      }
+    }
+    state.allTickers = [...LOCKED_UNIVERSE]; // enforce locked universe
+    state.allTickers.forEach(sym => ensureSymbolData(sym));
+
+    document.getElementById('apiKey').value = state.apiKey || '';
+    document.getElementById('dipThreshold').value = state.dipThreshold;
+    document.getElementById('takeProfit').value = state.takeProfit;
+    document.getElementById('stopLoss').value = state.stopLoss;
+    document.getElementById('autoMarketHours').checked = state.autoMarketHours;
+  }
+
+  function saveState() {
+    state.apiKey = document.getElementById('apiKey').value.trim();
+    state.dipThreshold = parseFloat(document.getElementById('dipThreshold').value) || 0.35;
+    state.takeProfit = parseFloat(document.getElementById('takeProfit').value) || 1.20;
+    state.stopLoss = parseFloat(document.getElementById('stopLoss').value) || 0.80;
+    state.autoMarketHours = document.getElementById('autoMarketHours').checked;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  }
+
+  function ensureSymbolData(sym) {
+    if (!state.positions[sym]) state.positions[sym] = { shares: 0, avgPrice: 0 };
+    if (!state.candles[sym]) state.candles[sym] = [];
+    if (!state.markers[sym]) state.markers[sym] = [];
+  }
+
+  function isUSMarketOpen() {
+    const now = new Date();
+    const nyString = now.toLocaleString('en-US', { timeZone: 'America/New_York' });
+    const nyDate = new Date(nyString);
+    const day = nyDate.getDay(); 
+    if (day === 0 || day === 6) return false;
+
+    const mins = nyDate.getHours() * 60 + nyDate.getMinutes();
+    const marketOpen = 9 * 60 + 30;  
+    const marketClose = 16 * 60;      
+    return mins >= marketOpen && mins < marketClose;
+  }
+
+  function updateMarketClock() {
+    const open = isUSMarketOpen();
+    const badge = document.getElementById('marketBadge');
+    if (open) {
+      badge.textContent = 'US Market: OPEN';
+      badge.className = 'badge open';
+    } else {
+      badge.textContent = 'US Market: CLOSED';
+      badge.className = 'badge closed';
+    }
+
+    if (state.isBotEnabled && state.autoMarketHours) {
+      if (open && !pollTimer) {
+        log('Market opened! Resuming background scanning...', 'log-signal');
+        startPollingLoop();
+      } else if (!open && pollTimer) {
+        log('Market closed. Pausing API polling until next open (state saved).', 'log-info');
+        stopPollingLoop();
+      }
+    }
+  }
+
+  function initChart() {
+    const container = document.getElementById('chartContainer');
+    chart = LightweightCharts.createChart(container, {
+      layout: {
+        background: { color: '#0e1117' },
+        textColor: '#d1d4dc',
+      },
+      grid: {
+        vertLines: { color: '#1f2630' },
+        horzLines: { color: '#1f2630' },
+      },
+      timeScale: {
+        timeVisible: true,
+        secondsVisible: false,
+        borderColor: '#30363d',
+      },
+      rightPriceScale: {
+        borderColor: '#30363d',
+      },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
+    });
+
+    candleSeries = chart.addCandlestickSeries({
+      upColor: '#00e676',
+      downColor: '#ff5252',
+      borderVisible: false,
+      wickUpColor: '#00e676',
+      wickDownColor: '#ff5252',
+    });
+
+    window.addEventListener('resize', () => {
+      chart.applyOptions({ width: container.clientWidth });
+    });
+
+    renderChartForSymbol(state.selectedChartTicker);
+  }
+
+  function renderChartForSymbol(sym) {
+    ensureSymbolData(sym);
+    document.getElementById('chartTitle').textContent = `${sym} — Live 1m Candlestick Chart`;
+    document.getElementById('chartSelect').value = sym;
+
+    const candles = state.candles[sym];
+    const markers = state.markers[sym];
+    candleSeries.setData(candles);
+    candleSeries.setMarkers(markers);
+    chart.timeScale().fitContent();
+  }
+
+  function switchChartSymbol(sym) {
+    state.selectedChartTicker = sym;
+    saveState();
+    renderChartForSymbol(sym);
+  }
+
+  function updateCandlestick(sym, price, unixTimestampSec) {
+    ensureSymbolData(sym);
+    const minuteBucket = Math.floor(unixTimestampSec / 60) * 60;
+    const list = state.candles[sym];
+    const last = list[list.length - 1];
+
+    if (!last || last.time < minuteBucket) {
+      list.push({
+        time: minuteBucket,
+        open: price,
+        high: price,
+        low: price,
+        close: price
+      });
+      if (list.length > 200) list.shift();
+    } else {
+      last.high = Math.max(last.high, price);
+      last.low = Math.min(last.low, price);
+      last.close = price;
+    }
+
+    if (sym === state.selectedChartTicker) {
+      candleSeries.setData(list);
+      candleSeries.setMarkers(state.markers[sym]);
+    }
+  }
+
+  function calculateRSI(candles, period = 14) {
+    if (candles.length <= period) return 50;
+    let gains = 0, losses = 0;
+    for (let i = candles.length - period; i < candles.length; i++) {
+      const diff = candles[i].close - candles[i - 1].close;
+      if (diff >= 0) gains += diff;
+      else losses -= diff;
+    }
+    if (losses === 0) return 100;
+    const rs = (gains / period) / (losses / period);
+    return 100 - (100 / (1 + rs));
+  }
+
+  function evaluateSignal(sym) {
+    const candles = state.candles[sym];
+    if (candles.length < 4) return { action: 'HOLD', reason: 'Building candles' };
+
+    const curr = candles[candles.length - 1];
+    const prev = candles[candles.length - 2];
+
+    const lookback = candles.slice(-12);
+    const avgClose = lookback.reduce((acc, c) => acc + c.close, 0) / lookback.length;
+    const dipPct = ((avgClose - curr.close) / avgClose) * 100;
+    const rsi = calculateRSI(candles, Math.min(14, candles.length - 1));
+
+    const body = Math.abs(curr.close - curr.open);
+    const range = Math.max(curr.high - curr.low, 0.0001);
+    const lowerWick = Math.min(curr.open, curr.close) - curr.low;
+    const upperWick = curr.high - Math.max(curr.open, curr.close);
+
+    const isHammer = (lowerWick >= body * 1.8) && (upperWick <= body * 0.6) && (curr.close >= curr.open);
+    const isBullishEngulfing = (prev.close < prev.open) &&
+      (curr.close > curr.open) &&
+      (curr.open <= prev.close) &&
+      (curr.close >= prev.open);
+    const isGreenReversal = (prev.close < prev.open) &&
+      (curr.close > curr.open) &&
+      (body / range > 0.55);
+
+    const hasBullishCandle = isHammer || isBullishEngulfing || isGreenReversal;
+    const isStrongDip = (dipPct >= state.dipThreshold) || (rsi <= 34);
+
+    if (isStrongDip && hasBullishCandle) {
+      const patternName = isHammer ? 'Hammer' : (isBullishEngulfing ? 'Bullish Engulfing' : 'Reversal Candle');
+      return {
+        action: 'BUY',
+        reason: `Dip -${dipPct.toFixed(2)}% + ${patternName} (RSI ${rsi.toFixed(0)})`
+      };
+    }
+
+    const isShootingStar = (upperWick >= body * 2.0) && (curr.close < curr.open);
+    if (isShootingStar && curr.close > avgClose * 1.003) {
+      return { action: 'SELL_SIGNAL', reason: 'Bearish Shooting Star at peak' };
+    }
+
+    return { action: 'HOLD', reason: `Dip ${dipPct.toFixed(2)}% | RSI ${rsi.toFixed(0)}` };
+  }
+
+  function executeBuy(sym, price, reason, candleTime) {
+    const pos = state.positions[sym];
+    if (pos.shares > 0) return; 
+
+    const equity = getTotalPortfolioValue();
+    const budget = Math.min(state.cash, equity * 0.15);
+    const qty = Math.floor(budget / price);
+    if (qty <= 0) return;
+
+    const cost = qty * price;
+    state.cash -= cost;
+    pos.shares = qty;
+    pos.avgPrice = price;
+
+    const marker = {
+      time: candleTime,
+      position: 'belowBar',
+      color: '#00e676',
+      shape: 'arrowUp',
+      text: `BUY ${qty} @ $${price.toFixed(2)}`
+    };
+    state.markers[sym].push(marker);
+
+    recordTrade('BUY', sym, qty, price, reason);
+    log(`BUY ${qty} ${sym} @ $${price.toFixed(2)} — ${reason}`, 'log-buy');
+  }
+
+  function executeSell(sym, price, reason, candleTime) {
+    const pos = state.positions[sym];
+    if (!pos || pos.shares <= 0) return;
+
+    const qty = pos.shares;
+    const proceeds = qty * price;
+    const profit = (price - pos.avgPrice) * qty;
+    state.cash += proceeds;
+    pos.shares = 0;
+    pos.avgPrice = 0;
+
+    const marker = {
+      time: candleTime,
+      position: 'aboveBar',
+      color: '#ff5252',
+      shape: 'arrowDown',
+      text: `SELL ${qty} @ $${price.toFixed(2)}`
+    };
+    state.markers[sym].push(marker);
+
+    const sign = profit >= 0 ? '+' : '';
+    recordTrade('SELL', sym, qty, price, `${reason} (${sign}$${profit.toFixed(2)})`);
+    log(`SELL ${qty} ${sym} @ $${price.toFixed(2)} — ${reason} (${sign}$${profit.toFixed(2)})`, 'log-sell');
+  }
+
+  function recordTrade(side, sym, shares, price, reason) {
+    state.trades.unshift({
+      timeStr: new Date().toLocaleTimeString(),
+      side,
+      ticker: sym,
+      shares,
+      price,
+      reason
+    });
+    if (state.trades.length > 100) state.trades.pop();
+    saveState();
+  }
+
+  async function scanMarketCycle() {
+    saveState();
+    if (!state.apiKey) {
+      log('Please enter your Finnhub API key to fetch live market prices.', 'log-signal');
+      stopBot();
+      return;
+    }
+
+    const activeSet = new Set([
+      ...state.enabledTickers,
+      ...Object.keys(state.positions).filter(s => state.positions[s].shares > 0)
+    ]);
+    const symbols = Array.from(activeSet);
+    if (symbols.length === 0) return;
+
+    for (const sym of symbols) {
+      try {
+        const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${sym}&token=${state.apiKey}`);
+        const data = await res.json();
+        if (!data || !data.c || data.c === 0) continue;
+
+        const price = parseFloat(data.c);
+        const nowSec = Math.floor(Date.now() / 1000);
+        updateCandlestick(sym, price, nowSec);
+
+        const candles = state.candles[sym];
+        const latestCandleTime = candles[candles.length - 1].time;
+        const pos = state.positions[sym];
+
+        if (pos && pos.shares > 0) {
+          const changePct = ((price - pos.avgPrice) / pos.avgPrice) * 100;
+          if (changePct >= state.takeProfit) {
+            executeSell(sym, price, `Take Profit +${changePct.toFixed(2)}%`, latestCandleTime);
+            continue;
+          }
+          if (changePct <= -state.stopLoss) {
+            executeSell(sym, price, `Stop Loss ${changePct.toFixed(2)}%`, latestCandleTime);
+            continue;
+          }
+        }
+
+        const signal = evaluateSignal(sym);
+        if (signal.action === 'BUY' && state.enabledTickers.includes(sym)) {
+          executeBuy(sym, price, signal.reason, latestCandleTime);
+        } else if (signal.action === 'SELL_SIGNAL' && pos && pos.shares > 0) {
+          executeSell(sym, price, signal.reason, latestCandleTime);
+        }
+      } catch (err) {
+        log(`Error polling ${sym}: ${err.message}`, 'log-info');
+      }
+    }
+
+    saveState();
+    renderAllUI();
+  }
+
+  function simulateMarketTick() {
+    const sym = state.selectedChartTicker;
+    ensureSymbolData(sym);
+    const candles = state.candles[sym];
+    const basePrice = candles.length > 0 ? candles[candles.length - 1].close : 140.00;
+    const nowSec = candles.length > 0
+      ? candles[candles.length - 1].time + 60
+      : Math.floor(Date.now() / 1000);
+
+    const c1 = { time: nowSec, open: basePrice, high: basePrice * 1.001, low: basePrice * 0.996, close: basePrice * 0.997 };
+    const c2 = { time: nowSec + 60, open: c1.close, high: c1.close, low: c1.close * 0.994, close: c1.close * 0.995 };
+    const c3 = { time: nowSec + 120, open: c2.close, high: c2.close, low: c2.close * 0.993, close: c2.close * 0.994 };
+    const hammerOpen = c3.close;
+    const hammerClose = hammerOpen * 1.0015;
+    const hammerLow = hammerOpen * 0.993; 
+    const c4 = { time: nowSec + 180, open: hammerOpen, high: hammerClose * 1.0005, low: hammerLow, close: hammerClose };
+
+    candles.push(c1, c2, c3, c4);
+    if (candles.length > 200) candles.splice(0, candles.length - 200);
+
+    const signal = evaluateSignal(sym);
+    log(`[SIMULATION] ${sym} formed dip & candle -> ${signal.action} (${signal.reason})`, 'log-signal');
+
+    if (signal.action === 'BUY') {
+      executeBuy(sym, c4.close, signal.reason, c4.time);
+    } else if (state.positions[sym].shares > 0) {
+      const rallyPrice = state.positions[sym].avgPrice * (1 + (state.takeProfit + 0.2) / 100);
+      const c5 = { time: nowSec + 240, open: c4.close, high: rallyPrice, low: c4.close, close: rallyPrice };
+      candles.push(c5);
+      executeSell(sym, rallyPrice, `Take Profit +${state.takeProfit}%`, c5.time);
+    }
+
+    saveState();
+    renderAllUI();
+    renderChartForSymbol(sym);
+  }
+
+  function startPollingLoop() {
+    if (pollTimer) clearInterval(pollTimer);
+    scanMarketCycle();
+    pollTimer = setInterval(scanMarketCycle, 15000);
+    document.getElementById('botStatusBadge').textContent = 'Bot Scanning Live';
+    document.getElementById('botStatusBadge').className = 'badge open';
+  }
+
+  function stopPollingLoop() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+    document.getElementById('botStatusBadge').textContent = state.isBotEnabled ? 'Waiting for Market Open' : 'Bot Idle';
+    document.getElementById('botStatusBadge').className = 'badge closed';
+  }
+
+  function toggleBot() {
+    if (state.isBotEnabled) {
+      stopBot();
+    } else {
+      state.isBotEnabled = true;
+      saveState();
+      updateToggleButton();
+      if (state.autoMarketHours && !isUSMarketOpen()) {
+        log('Bot armed! Waiting for US Market Open (9:30 AM ET) to execute live trades.', 'log-signal');
+        stopPollingLoop();
+      } else {
+        log('Bot started! Scanning locked tech universe for strong dips + bullish candlestick reversals.', 'log-buy');
+        startPollingLoop();
+      }
+    }
+  }
+
+  function stopBot() {
+    state.isBotEnabled = false;
+    saveState();
+    stopPollingLoop();
+    updateToggleButton();
+    log('Bot stopped.', 'log-info');
+  }
+
+  function updateToggleButton() {
+    const btn = document.getElementById('toggleBotBtn');
+    if (state.isBotEnabled) {
+      btn.textContent = 'Stop Engine';
+      btn.className = 'stop';
+    } else {
+      btn.textContent = 'Start Engine';
+      btn.className = '';
+    }
+  }
+
+  function renderWatchlistUI() {
+    const pillsContainer = document.getElementById('tickerPills');
+    const chartSelect = document.getElementById('chartSelect');
+    pillsContainer.innerHTML = '';
+    chartSelect.innerHTML = '';
+
+    state.allTickers.forEach(sym => {
+      const isEnabled = state.enabledTickers.includes(sym);
+
+      const pill = document.createElement('div');
+      pill.className = `pill ${isEnabled ? 'active' : ''}`;
+      pill.innerHTML = `
+        <input type="checkbox" ${isEnabled ? 'checked' : ''} onchange="toggleTickerEnabled('${sym}', this.checked)" />
+        <span onclick="switchChartSymbol('${sym}')" style="font-weight:700;">${sym}</span>
+      `;
+      pillsContainer.appendChild(pill);
+
+      const opt = document.createElement('option');
+      opt.value = sym;
+      opt.textContent = sym;
+      if (sym === state.selectedChartTicker) opt.selected = true;
+      chartSelect.appendChild(opt);
+    });
+  }
+
+  function toggleTickerEnabled(sym, checked) {
+    if (checked && !state.enabledTickers.includes(sym)) {
+      state.enabledTickers.push(sym);
+    } else if (!checked) {
+      state.enabledTickers = state.enabledTickers.filter(t => t !== sym);
+    }
+    saveState();
+    renderWatchlistUI();
+  }
+
+  function selectAllTickers(selectAll) {
+    state.enabledTickers = selectAll ? [...state.allTickers] : [];
+    saveState();
+    renderWatchlistUI();
+  }
+
+  function getTotalPortfolioValue() {
+    let total = state.cash;
+    Object.keys(state.positions).forEach(sym => {
+      const pos = state.positions[sym];
+      if (pos.shares > 0) {
+        const candles = state.candles[sym] || [];
+        const lastPrice = candles.length > 0 ? candles[candles.length - 1].close : pos.avgPrice;
+        total += pos.shares * lastPrice;
+      }
+    });
+    return total;
+  }
+
+  function renderAllUI() {
+    const totalVal = getTotalPortfolioValue();
+    const pnl = totalVal - state.initialCash;
+    const pnlPct = (pnl / state.initialCash) * 100;
+
+    document.getElementById('totalValue').textContent = `$${totalVal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    document.getElementById('cashValue').textContent = `$${state.cash.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+    const pnlEl = document.getElementById('pnlValue');
+    const sign = pnl >= 0 ? '+' : '';
+    pnlEl.textContent = `${sign}$${pnl.toFixed(2)} (${sign}${pnlPct.toFixed(2)}%)`;
+    pnlEl.className = `stat-val ${pnl >= 0 ? 'pos' : 'neg'}`;
+
+    document.getElementById('tradeCount').textContent = state.trades.length;
+
+    const posBody = document.getElementById('positionsBody');
+    posBody.innerHTML = '';
+    const heldSymbols = Object.keys(state.positions).filter(s => state.positions[s].shares > 0);
+    if (heldSymbols.length === 0) {
+      posBody.innerHTML = `<tr><td colspan="5" style="color:var(--muted); text-align:center; padding:18px;">No open positions. Waiting for dip + reversal pattern...</td></tr>`;
+    } else {
+      heldSymbols.forEach(sym => {
+        const pos = state.positions[sym];
+        const candles = state.candles[sym] || [];
+        const last = candles.length > 0 ? candles[candles.length - 1].close : pos.avgPrice;
+        const unrealized = (last - pos.avgPrice) * pos.shares;
+        const uSign = unrealized >= 0 ? '+' : '';
+        const tr = document.createElement('tr');
+        tr.style.cursor = 'pointer';
+        tr.onclick = () => switchChartSymbol(sym);
+        tr.innerHTML = `
+          <td><strong>${sym}</strong></td>
+          <td>${pos.shares}</td>
+          <td>$${pos.avgPrice.toFixed(2)}</td>
+          <td>$${last.toFixed(2)}</td>
+          <td class="${unrealized >= 0 ? 'pos' : 'neg'}">${uSign}$${unrealized.toFixed(2)}</td>
+        `;
+        posBody.appendChild(tr);
+      });
+    }
+
+    const tradesBody = document.getElementById('tradesBody');
+    tradesBody.innerHTML = '';
+    if (state.trades.length === 0) {
+      tradesBody.innerHTML = `<tr><td colspan="5" style="color:var(--muted); text-align:center; padding:18px;">No trades executed yet.</td></tr>`;
+    } else {
+      state.trades.slice(0, 25).forEach(t => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${t.timeStr}</td>
+          <td class="${t.side === 'BUY' ? 'pos' : 'neg'}"><strong>${t.side}</strong></td>
+          <td>${t.ticker}</td>
+          <td>$${t.price.toFixed(2)}</td>
+          <td style="color:var(--muted);">${t.reason}</td>
+        `;
+        tradesBody.appendChild(tr);
+      });
+    }
+  }
+
+  function log(msg, cls = 'log-info') {
+    const logs = document.getElementById('logs');
+    const time = new Date().toLocaleTimeString();
+    const div = document.createElement('div');
+    div.className = cls;
+    div.textContent = `[${time}] ${msg}`;
+    logs.prepend(div);
+    if (logs.children.length > 150) logs.removeChild(logs.lastChild);
+  }
+
+  function resetPortfolio() {
+    if (!confirm('Reset paper portfolio back to $10,000 and clear saved trades/candles?')) return;
+    localStorage.removeItem(STORAGE_KEY);
+    location.reload();
+  }
+
+  window.addEventListener('DOMContentLoaded', () => {
+    loadState();
+    renderWatchlistUI();
+    initChart();
+    renderAllUI();
+    updateToggleButton();
+    updateMarketClock();
+    marketClockTimer = setInterval(updateMarketClock, 15000);
+
+    if (state.isBotEnabled) {
+      log('Restored previous session from localStorage.', 'log-signal');
+      if (!state.autoMarketHours || isUSMarketOpen()) {
+        startPollingLoop();
+      } else {
+        log('Bot is armed and waiting for US Market Open (9:30 AM ET).', 'log-info');
+      }
+    }
+  });
+</script>
+</body>
+</html>
