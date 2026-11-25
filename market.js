@@ -12,9 +12,16 @@
 const QUOTE_ENDPOINT =
   'https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol';
 const CHART_ENDPOINT = 'https://ts-api.cnbc.com/harmony/app/charts/1D.json';
+const NEWS_ENDPOINT = 'https://api.queryly.com/cnbc/json.aspx';
+const NEWS_KEY = '31a35d40a9a64ab3';
 
 const QUOTE_TTL = 4000;
 const BAR_TTL = 40000;
+const NEWS_TTL = 300000;
+
+/* Broad-market tape + sector ETFs for the market overview. */
+export const MARKET_SYMBOLS = ['.SPX', '.IXIC', '.DJI', 'IWM', '.VIX', 'US10Y', '@CL.1', '@GC.1'];
+export const SECTOR_SYMBOLS = ['XLK', 'XLF', 'XLE', 'XLV', 'XLI', 'XLY', 'XLP', 'XLU', 'XLB', 'XLRE', 'XLC'];
 
 function toNumber(value, fallback = 0) {
   if (value === null || value === undefined) return fallback;
@@ -60,6 +67,28 @@ function parseQuote(raw) {
     extendedChangePct: ext ? toNumber(ext.change_pct) : 0,
     at: Date.now(),
   };
+}
+
+function parseNewsDate(value) {
+  const text = String(value || '').trim();
+  if (!text) return 0;
+  const normalized = text.replace(/([+-]\d{2})(\d{2})$/, '$1:$2');
+  const ts = Date.parse(normalized);
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function parseNews(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((r) => ({
+      title: String(r['cn:title'] || r.title || '').replace(/\s+/g, ' ').trim(),
+      summary: String(r.description || r.summary || '').replace(/\s+/g, ' ').trim(),
+      url: String(r.url || r['@id'] || '').trim(),
+      date: parseNewsDate(r.date || r.datePublished || r['cn:lastPubDate']),
+      section: String(r['cn:section'] || r.section || '').trim(),
+    }))
+    .filter((x) => x.title && /^https?:\/\//.test(x.url))
+    .sort((a, b) => b.date - a.date);
 }
 
 function parseBars(raw) {
@@ -113,6 +142,8 @@ export class MarketFeed {
     this.barCache = new Map();
     this.quoteInflight = new Map();
     this.barInflight = new Map();
+    this.newsCache = new Map();
+    this.newsInflight = new Map();
     this.errors = [];
     this.lastQuoteAt = 0;
     this.lastBarAt = 0;
@@ -213,6 +244,47 @@ export class MarketFeed {
 
   cachedBars(symbol) {
     return this.barCache.get(String(symbol).toUpperCase())?.bars || null;
+  }
+
+  /* Broad-market quotes for the market overview tab. */
+  async indices() {
+    const map = await this.quotes([...MARKET_SYMBOLS, ...SECTOR_SYMBOLS]);
+    return {
+      market: MARKET_SYMBOLS.map((s) => map[s]).filter(Boolean),
+      sectors: SECTOR_SYMBOLS.map((s) => map[s]).filter(Boolean),
+    };
+  }
+
+  /* CNBC site search, which is CORS-friendly and needs no API key. */
+  async news(query, count = 4, { sortByDate = false } = {}) {
+    const q = String(query || '').trim();
+    if (!q) return [];
+    const key = `${q}|${count}|${sortByDate ? 'date' : 'rel'}`;
+    const cached = this.newsCache.get(key);
+    if (cached && Date.now() - cached.at < NEWS_TTL) return cached.items;
+    if (this.newsInflight.has(key)) return this.newsInflight.get(key);
+
+    const sortParam = sortByDate ? '&sort=date' : '';
+    const url = `${NEWS_ENDPOINT}?queryly_key=${NEWS_KEY}&query=${encodeURIComponent(q)}&endindex=0&batchsize=${count}${sortParam}&callback=&showFaces=1&extendeddata=1`;
+    const task = (async () => {
+      try {
+        const data = await fetchWithTimeout(url, 12000);
+        const items = parseNews(data?.results).slice(0, count);
+        this.newsCache.set(key, { at: Date.now(), items });
+        if (this.newsCache.size > 50) {
+          const oldest = [...this.newsCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+          if (oldest) this.newsCache.delete(oldest[0]);
+        }
+        return items;
+      } catch (err) {
+        this.noteError('news', err.message);
+        throw err;
+      } finally {
+        this.newsInflight.delete(key);
+      }
+    })();
+    this.newsInflight.set(key, task);
+    return task;
   }
 
   clearSymbol(symbol) {

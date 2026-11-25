@@ -21,6 +21,8 @@ import {
   newTrade,
   validSymbol,
   STRATEGY_MAP,
+  aggregateBars,
+  dropFormingBar,
 } from './engine.js';
 import { MarketFeed } from './market.js';
 import { saveState } from './store.js';
@@ -32,6 +34,8 @@ const PERSIST_MS = 15000;
 const EOD_FLATTEN_MIN = 5;
 const BAR_STALE_MS = 60000;
 const BAR_STALE_IDLE_MS = 900000;
+const INDEX_MS = 30000;
+const NEWS_MS = 300000;
 
 const round2 = (n) => Math.round(n * 100) / 100;
 
@@ -67,6 +71,14 @@ export class Bot {
     this.bars = {};
     this.signals = {};
     this.regime = null;
+    this.indices = [];
+    this.sectors = [];
+    this.news = { general: [], bySymbol: [], at: 0 };
+    this.newsAt = 0;
+    this.newsBusy = false;
+    this.newsError = '';
+    this.lastIndices = 0;
+    this.chartSymbol = '';
     this.status = marketStatus();
     this.lastSample = 0;
     this.lastPersist = 0;
@@ -198,7 +210,8 @@ export class Bot {
     if (!stale.length) return;
 
     const held = new Set(Object.keys(this.state.portfolio.positions));
-    stale.sort((a, b) => Number(held.has(b)) - Number(held.has(a)));
+    const rank = (sym) => (held.has(sym) ? 2 : 0) + (sym === this.chartSymbol ? 3 : 0);
+    stale.sort((a, b) => rank(b) - rank(a));
     const batch = stale.slice(0, live ? 4 : 6);
     await this.feed.refreshBars(batch, { concurrency: 2 });
     for (const sym of targets) {
@@ -207,13 +220,82 @@ export class Bot {
     }
   }
 
+  /* On-demand bar load for the chart panel. */
+  async ensureBars(symbol, { force = false } = {}) {
+    const sym = String(symbol || '').toUpperCase();
+    if (!sym) return null;
+    try {
+      const bars = await this.feed.bars(sym, { force });
+      if (bars && bars.length) {
+        this.bars[sym] = bars;
+        this.emit();
+      }
+      return bars;
+    } catch {
+      return null;
+    }
+  }
+
+  setChartSymbol(symbol) {
+    this.chartSymbol = String(symbol || '').toUpperCase();
+    if (this.chartSymbol) this.ensureBars(this.chartSymbol);
+  }
+
+  async refreshIndices() {
+    const now = Date.now();
+    if (now - this.lastIndices < INDEX_MS) return;
+    this.lastIndices = now;
+    try {
+      const data = await this.feed.indices();
+      if (data.market.length) this.indices = data.market;
+      if (data.sectors.length) this.sectors = data.sectors;
+    } catch {
+      /* recorded inside the feed */
+    }
+  }
+
+  newsSymbols() {
+    const held = Object.keys(this.state.portfolio.positions);
+    const ranked = this.state.watchlist
+      .filter((w) => w.enabled)
+      .map((w) => ({ sym: w.symbol, chg: Math.abs(this.quotes[w.symbol]?.changePct || 0) }))
+      .sort((a, b) => b.chg - a.chg)
+      .map((x) => x.sym);
+    return [...new Set([...held, ...ranked])].slice(0, 5);
+  }
+
+  async refreshNews(force = false) {
+    if (this.newsBusy) return this.news;
+    if (!force && Date.now() - this.newsAt < NEWS_MS) return this.news;
+    this.newsBusy = true;
+    this.newsError = '';
+    try {
+      const generalPromise = this.feed.news('stock market', 10, { sortByDate: true });
+      const perPromise = Promise.all(
+        this.newsSymbols().map(async (symbol) => ({
+          symbol,
+          items: await this.feed.news(`${symbol} stock`, 3).catch(() => []),
+        })),
+      );
+      const [general, per] = await Promise.all([generalPromise, perPromise]);
+      this.news = { general, bySymbol: per.filter((x) => x.items.length), at: Date.now() };
+      this.newsAt = Date.now();
+    } catch (err) {
+      this.newsError = err && err.message ? err.message : 'Could not load headlines';
+    } finally {
+      this.newsBusy = false;
+      this.emit();
+    }
+    return this.news;
+  }
+
   updateRegime() {
     const spy = this.bars.SPY;
     if (!spy || spy.length < 60) {
       this.regime = null;
       return;
     }
-    const { combined } = regularSeries(spy, this.status.date);
+    const { combined } = regularSeries(dropFormingBar(spy), this.status.date);
     if (combined.length < 60) {
       this.regime = null;
       return;
@@ -224,19 +306,29 @@ export class Bot {
     const e50 = ema(closes, 50);
     const last = closes[closes.length - 1];
     const bias = e9 > e21 && e21 > e50 ? 'up' : e9 < e21 && e21 < e50 ? 'down' : 'flat';
-    this.regime = { bias, e9, e21, e50, last };
+    const vix = this.indices.find((q) => q.symbol === '.VIX')?.price || null;
+    this.regime = { bias, e9, e21, e50, last, vix, changePct: this.quotes.SPY?.changePct ?? null };
   }
 
   updateSignals() {
     const today = this.status.date;
     const settings = this.state.settings;
     const signals = {};
+    const now = Date.now();
+    const spyChangePct = this.quotes.SPY?.changePct;
+    const vix = this.regime?.vix ?? null;
     for (const sym of this.activeSymbols()) {
       const raw = this.bars[sym];
       if (!raw || raw.length < 30) continue;
-      const { session, combined } = regularSeries(raw, today);
+      const { session, combined } = regularSeries(dropFormingBar(raw, now), today);
       if (!session.length) continue;
-      const setups = evaluate(combined, settings.strategies, session);
+      const q = this.quotes[sym];
+      const setups = evaluate(combined, settings.strategies, session, {
+        htf: aggregateBars(combined, 5),
+        changePct: q?.changePct,
+        spyChangePct,
+        vix,
+      });
       signals[sym] = { setups, session, combined, at: Date.now() };
     }
     this.signals = signals;
@@ -266,9 +358,11 @@ export class Bot {
       if (cached) this.bars[sym] = cached;
     }
     if (barTargets.length) await this.refreshBars(barTargets);
+    await this.refreshIndices();
 
     this.updateRegime();
     this.updateSignals();
+    if (['pre', 'open', 'after'].includes(status.state)) this.refreshNews().catch(() => {});
     this.rolloverDay();
     this.markPositions();
 
@@ -349,25 +443,46 @@ export class Bot {
       if (!p) continue;
       const mark = p.mark > 0 ? p.mark : p.entry;
       const risk = p.risk > 0 ? p.risk : Math.abs(p.entry - p.stop);
+      const favorable = p.side === 'LONG' ? p.high - p.entry : p.entry - p.low;
+      const rMultiple = risk > 0 ? favorable / risk : 0;
+
+      /* Time stop: reclaim capital from a trade that has gone nowhere. */
+      if (
+        settings.timeStopMin > 0 &&
+        rMultiple < 0.35 &&
+        Date.now() - p.openedAt >= settings.timeStopMin * 60000
+      ) {
+        this.closePosition(sym, 'Time stop', mark);
+        continue;
+      }
 
       /* Trailing stop: only once the trade has earned trailTriggerR. */
-      if (risk > 0) {
-        const favorable = p.side === 'LONG' ? p.high - p.entry : p.entry - p.low;
-        if (favorable >= settings.trailTriggerR * risk) {
-          const trail = settings.trailPct / 100;
-          if (p.side === 'LONG') {
-            const next = round2(p.high * (1 - trail));
-            if (next > p.stop + 0.005) {
-              p.stop = next;
-              addLog(state, 'info', `${sym} stop raised`, `Trailing stop moved to ${usd(next)}`, sym);
-            }
-          } else {
-            const next = round2(p.low * (1 + trail));
-            if (next < p.stop - 0.005) {
-              p.stop = next;
-              addLog(state, 'info', `${sym} stop lowered`, `Trailing stop moved to ${usd(next)}`, sym);
-            }
+      if (risk > 0 && favorable >= settings.trailTriggerR * risk) {
+        const trail = settings.trailPct / 100;
+        if (p.side === 'LONG') {
+          const next = round2(p.high * (1 - trail));
+          if (next > p.stop + 0.005) {
+            p.stop = next;
+            addLog(state, 'info', `${sym} stop raised`, `Trailing stop moved to ${usd(next)}`, sym);
           }
+        } else {
+          const next = round2(p.low * (1 + trail));
+          if (next < p.stop - 0.005) {
+            p.stop = next;
+            addLog(state, 'info', `${sym} stop lowered`, `Trailing stop moved to ${usd(next)}`, sym);
+          }
+        }
+      }
+
+      /* After a full 1R of favorable movement, never let a winner become a loser. */
+      if (risk > 0 && rMultiple >= 1) {
+        const buffer = Math.max(0.01, risk * 0.03);
+        if (p.side === 'LONG' && p.stop < p.entry + buffer) {
+          p.stop = round2(p.entry + buffer);
+          addLog(state, 'info', `${sym} stop raised`, `Stop locked in at breakeven (${usd(p.stop)})`, sym);
+        } else if (p.side === 'SHORT' && p.stop > p.entry - buffer) {
+          p.stop = round2(p.entry - buffer);
+          addLog(state, 'info', `${sym} stop lowered`, `Stop locked in at breakeven (${usd(p.stop)})`, sym);
         }
       }
 
@@ -465,6 +580,15 @@ export class Bot {
     let slots = settings.maxPositions - Object.keys(pf.positions).length;
     if (slots <= 0) return;
 
+    const regime = this.regime;
+    const vix = Number.isFinite(regime?.vix) ? regime.vix : null;
+    const threshold =
+      settings.threshold +
+      (regime && regime.bias === 'flat' ? 2 : 0) +
+      (vix != null && vix > 32 ? 4 : 0) +
+      (vix != null && vix > 40 ? 4 : 0);
+    const chase = settings.maxChasePct / 100;
+
     const candidates = [];
     for (const [sym, sig] of Object.entries(this.signals)) {
       if (pf.positions[sym]) continue;
@@ -472,19 +596,31 @@ export class Bot {
       if (!watch || !watch.enabled) continue;
       if (sig.session.length < settings.minBars) continue;
       const lastExit = pf.lastExit[sym];
-      if (lastExit && Date.now() - lastExit < settings.cooldownMin * 60000) continue;
+      const lastClose = pf.trades.find((t) => t.action === 'CLOSE' && t.symbol === sym);
+      const cooldownMin = settings.cooldownMin * (lastClose && lastClose.pnl < 0 ? 2 : 1);
+      if (lastExit && Date.now() - lastExit < cooldownMin * 60000) continue;
 
       for (const setup of sig.setups) {
-        if (setup.score < settings.threshold) continue;
+        if (setup.score < threshold) continue;
         if (setup.side === 'SHORT' && !settings.allowShorts) continue;
-        if (settings.regimeFilter && this.regime) {
-          if (this.regime.bias === 'up' && setup.side === 'SHORT') continue;
-          if (this.regime.bias === 'down' && setup.side === 'LONG') continue;
+        if (settings.regimeFilter && regime) {
+          if (regime.bias === 'up' && setup.side === 'SHORT') continue;
+          if (regime.bias === 'down' && setup.side === 'LONG') continue;
+          if (vix != null && vix > 32 && (setup.id === 'reversion_long' || setup.id === 'reversion_short')) {
+            continue;
+          }
         }
         const q = this.quotes[sym];
         const price =
           q && q.regularPrice > 0 ? q.regularPrice : sig.combined[sig.combined.length - 1]?.c;
         if (!(price > 0)) continue;
+
+        /* Never chase a move that has already run past the signal bar. */
+        const barClose = sig.combined[sig.combined.length - 1]?.c;
+        if (barClose > 0) {
+          if (setup.side === 'LONG' && price > barClose * (1 + chase)) continue;
+          if (setup.side === 'SHORT' && price < barClose * (1 - chase)) continue;
+        }
         candidates.push({ sym, setup, price });
       }
     }
@@ -653,6 +789,11 @@ export class Bot {
       quotes: this.quotes,
       signals: this.signals,
       regime: this.regime,
+      indices: this.indices,
+      sectors: this.sectors,
+      news: this.news,
+      newsAt: this.newsAt,
+      newsError: this.newsError,
       marks,
       metrics: metricsOf(pf, marks),
       exposure: this.grossExposure(),

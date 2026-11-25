@@ -70,6 +70,7 @@
 
       <nav class="tabs" id="tabs" aria-label="Sections">
         <button type="button" class="tab is-active" data-view="dashboard">Dashboard</button>
+        <button type="button" class="tab" data-view="market">Market</button>
         <button type="button" class="tab" data-view="watchlist">Watchlist</button>
         <button type="button" class="tab" data-view="strategies">Strategies</button>
         <button type="button" class="tab" data-view="history">History</button>
@@ -99,6 +100,26 @@
                   <div class="stat"><span class="stat-label">Max drawdown</span><span class="stat-value" id="statMaxDD">—</span><span class="stat-sub" id="statMaxDDSub"></span></div>
                   <div class="stat"><span class="stat-label">Exposure</span><span class="stat-value" id="statExposure">—</span><span class="stat-sub" id="statExposureSub"></span></div>
                 </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-head wrap">
+                  <h2>Candlesticks <span class="count" id="chartBadge">—</span></h2>
+                  <div class="chart-controls">
+                    <span class="panel-note" id="chartNote"></span>
+                    <select id="chartSymbol" aria-label="Chart symbol"></select>
+                    <div class="seg" id="chartIntervals" role="group" aria-label="Candle interval">
+                      <button type="button" data-interval="1">1m</button>
+                      <button type="button" data-interval="5" class="active">5m</button>
+                      <button type="button" data-interval="15">15m</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="chart-wrap candle-wrap">
+                  <canvas id="candleChart" aria-label="Candlestick chart"></canvas>
+                  <div class="chart-empty" id="candleEmpty">Loading candles…</div>
+                </div>
+                <div class="chart-legend" id="candleLegend"></div>
               </div>
 
               <div class="panel">
@@ -177,6 +198,60 @@
           </div>
         </section>
 
+        <!-- ------------------------------------------------------------- MARKET -->
+        <section class="view" data-view="market">
+          <div class="market-grid">
+            <div class="panel market-span">
+              <div class="panel-head wrap">
+                <h2>Market pulse</h2>
+                <span class="panel-note" id="marketNote">Loading quotes…</span>
+              </div>
+              <div class="index-grid" id="indexGrid"></div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head wrap">
+                <h2>Your watchlist today</h2>
+                <span class="panel-note" id="breadthNote"></span>
+              </div>
+              <div class="breadth" id="breadth"></div>
+              <div class="table-wrap">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Symbol</th>
+                      <th class="num">Last</th>
+                      <th class="num">Today</th>
+                      <th class="num">vs SPY</th>
+                      <th>Best setup</th>
+                    </tr>
+                  </thead>
+                  <tbody id="marketBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head wrap">
+                <h2>Sector heat</h2>
+                <span class="panel-note">Today’s move · SPDR ETFs</span>
+              </div>
+              <div class="sector-grid" id="sectorGrid"></div>
+            </div>
+
+            <div class="panel market-span">
+              <div class="panel-head wrap">
+                <h2>Headlines</h2>
+                <div class="btn-row">
+                  <span class="panel-note" id="newsNote"></span>
+                  <button class="ghost-btn" id="newsRefresh" type="button">Refresh</button>
+                </div>
+              </div>
+              <div class="news-list" id="newsList"></div>
+            </div>
+          </div>
+        </section>
+
         <!-- ---------------------------------------------------------- WATCHLIST -->
         <section class="view" data-view="watchlist">
           <div class="panel">
@@ -206,7 +281,7 @@
                     <th>Symbol</th>
                     <th class="num">Last</th>
                     <th class="num">Change</th>
-                    <th>Trend</th>
+                    <th>Candles</th>
                     <th>Signal</th>
                     <th class="center">Scanning</th>
                     <th></th>
@@ -246,6 +321,27 @@
               Longs and shorts use the same risk budget.
             </p>
             <div class="strategy-grid" id="strategyGrid"></div>
+          </div>
+
+          <div class="panel strategy-results">
+            <div class="panel-head wrap">
+              <h2>Live results by strategy</h2>
+              <span class="panel-note" id="strategyStatsNote">Closed trades only</span>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Strategy</th>
+                    <th>Side</th>
+                    <th class="num">Trades</th>
+                    <th class="num">Win rate</th>
+                    <th class="num">Net P&amp;L</th>
+                  </tr>
+                </thead>
+                <tbody id="strategyStats"></tbody>
+              </table>
+            </div>
           </div>
         </section>
 
@@ -296,7 +392,7 @@
 
       <footer class="footer">
         <span>YANAI TRADING · simulated paper account. No orders are ever sent to a broker.</span>
-        <span id="footFeed">Data: CNBC public quotes &amp; 1-minute bars · refreshes automatically</span>
+        <span id="footFeed">Data: CNBC public quotes, 1-minute bars &amp; headlines · refreshes automatically</span>
       </footer>
     </div>
 

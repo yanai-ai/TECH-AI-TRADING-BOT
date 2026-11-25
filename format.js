@@ -148,3 +148,31 @@ export function sparkline(values, width = 88, height = 26) {
   });
   return `M${pts.join('L')}`;
 }
+
+/* Tiny inline candlestick series as SVG inner markup (for the watchlist). */
+export function candleSpark(bars, count = 24, width = 88, height = 26) {
+  const view = (bars || []).filter((b) => b && b.c > 0 && b.h >= b.l).slice(-count);
+  if (view.length < 2) return '';
+  let min = Math.min(...view.map((b) => b.l));
+  let max = Math.max(...view.map((b) => b.h));
+  if (!(max > min)) {
+    max += 1;
+    min -= 1;
+  }
+  const pad = 2;
+  const innerH = height - pad * 2;
+  const slot = width / view.length;
+  const bodyW = Math.max(1, Math.min(4, slot * 0.58));
+  const y = (v) => pad + innerH - ((v - min) / (max - min)) * innerH;
+  return view
+    .map((b, i) => {
+      const x = i * slot + slot / 2;
+      const yo = y(b.o);
+      const yc = y(b.c);
+      const top = Math.min(yo, yc);
+      const hgt = Math.max(1, Math.abs(yc - yo));
+      const cls = b.c >= b.o ? 'up' : 'down';
+      return `<line class="c-${cls}" x1="${x.toFixed(1)}" y1="${y(b.h).toFixed(1)}" x2="${x.toFixed(1)}" y2="${y(b.l).toFixed(1)}"/><rect class="c-${cls}" x="${(x - bodyW / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${bodyW.toFixed(1)}" height="${hgt.toFixed(1)}" rx="0.4"/>`;
+    })
+    .join('');
+}

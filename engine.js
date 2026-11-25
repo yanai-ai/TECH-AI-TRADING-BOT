@@ -4,7 +4,7 @@
    portfolio accounting and settings. No DOM, no network.
    ========================================================================== */
 
-export const VERSION = '1.0.0';
+export const VERSION = '2.0.0';
 
 /* ----------------------------------------------------------------------------
    Strategy catalogue
@@ -94,8 +94,10 @@ export const PROFILES = {
     trailTriggerR: 1.0,
     trailPct: 0.7,
     dailyLossPct: 2.0,
-    maxTradesPerDay: 12,
+    maxTradesPerDay: 1000,
     cooldownMin: 10,
+    maxChasePct: 0.3,
+    timeStopMin: 60,
   },
   balanced: {
     label: 'Balanced',
@@ -108,8 +110,10 @@ export const PROFILES = {
     trailTriggerR: 1.0,
     trailPct: 0.8,
     dailyLossPct: 3.0,
-    maxTradesPerDay: 20,
+    maxTradesPerDay: 1000,
     cooldownMin: 5,
+    maxChasePct: 0.4,
+    timeStopMin: 45,
   },
   aggressive: {
     label: 'Aggressive',
@@ -122,8 +126,10 @@ export const PROFILES = {
     trailTriggerR: 0.8,
     trailPct: 1.0,
     dailyLossPct: 4.0,
-    maxTradesPerDay: 30,
+    maxTradesPerDay: 1000,
     cooldownMin: 3,
+    maxChasePct: 0.6,
+    timeStopMin: 30,
   },
 };
 
@@ -133,7 +139,7 @@ export const DEFAULT_SETTINGS = {
   strategies: [...STRATEGY_IDS],
   eodMode: 'close', // 'close' = flatten before the bell, 'hold' = carry overnight
   autoStart: false,
-  entryCutoffMin: 15,
+  entryCutoffMin: 20,
   minBars: 15,
   slippageBps: 2,
   maxGrossLeverage: 1.5,
@@ -141,6 +147,8 @@ export const DEFAULT_SETTINGS = {
   threshold: 60,
   allowShorts: true,
   regimeFilter: true,
+  maxChasePct: 0.4,
+  timeStopMin: 45,
 };
 
 export const DEFAULT_WATCHLIST = [
@@ -168,7 +176,7 @@ const LIMITS = {
   trailTriggerR: [0.2, 4],
   trailPct: [0, 4],
   dailyLossPct: [0.2, 8],
-  maxTradesPerDay: [1, 60],
+  maxTradesPerDay: [1, 1000],
   cooldownMin: [0, 60],
   entryCutoffMin: [0, 60],
   minBars: [5, 60],
@@ -176,9 +184,18 @@ const LIMITS = {
   maxGrossLeverage: [1, 3],
   startingEquity: [1000, 10000000],
   threshold: [40, 95],
+  maxChasePct: [0.05, 2],
+  timeStopMin: [0, 240],
 };
 
-const INTEGER_KEYS = new Set(['maxPositions', 'maxTradesPerDay', 'minBars', 'entryCutoffMin', 'cooldownMin']);
+const INTEGER_KEYS = new Set([
+  'maxPositions',
+  'maxTradesPerDay',
+  'minBars',
+  'entryCutoffMin',
+  'cooldownMin',
+  'timeStopMin',
+]);
 
 export const clamp = (n, lo, hi) => Math.min(Math.max(n, lo), hi);
 
@@ -511,14 +528,49 @@ export function relVolume(bars, n = 20) {
   return avg > 0 ? bars[bars.length - 1].v / avg : 1;
 }
 
+/* Aggregate 1-minute bars into 5/15-minute bars for higher-timeframe checks. */
+export function aggregateBars(bars, minutes = 5) {
+  if (!Array.isArray(bars) || minutes <= 1) return Array.isArray(bars) ? bars.slice() : [];
+  const span = minutes * 60;
+  const out = [];
+  let bucket = null;
+  for (const b of bars) {
+    if (!b || !(b.c > 0)) continue;
+    const key = Math.floor(b.t / span);
+    if (!bucket || bucket.key !== key) {
+      if (bucket) out.push(bucket.bar);
+      bucket = {
+        key,
+        bar: { t: key * span, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v || 0 },
+      };
+    } else {
+      const bar = bucket.bar;
+      bar.h = Math.max(bar.h, b.h);
+      bar.l = Math.min(bar.l, b.l);
+      bar.c = b.c;
+      bar.v += b.v || 0;
+    }
+  }
+  if (bucket) out.push(bucket.bar);
+  return out;
+}
+
+/* Drop the still-forming candle so signals are only generated on closed bars. */
+export function dropFormingBar(bars, nowMs = Date.now(), barMs = 60000) {
+  if (!Array.isArray(bars) || !bars.length) return [];
+  const last = bars[bars.length - 1];
+  if (last.t * 1000 + barMs > nowMs) return bars.slice(0, -1);
+  return bars;
+}
+
 /* ----------------------------------------------------------------------------
    Strategy evaluation
    bars        = warm-up context (previous session tail + today's regular bars)
    sessionBars = today's regular-session bars (used for VWAP)
    Returns an array of setups sorted by score, best first.
    -------------------------------------------------------------------------- */
-export function evaluate(bars, enabled = STRATEGY_IDS, sessionBars = null) {
-  if (!Array.isArray(bars) || bars.length < 25) return [];
+export function evaluate(bars, enabled = STRATEGY_IDS, sessionBars = null, ctx = {}) {
+  if (!Array.isArray(bars) || bars.length < 30) return [];
   const last = bars[bars.length - 1];
   if (!last || !(last.c > 0)) return [];
   const closes = bars.map((b) => b.c);
@@ -529,7 +581,7 @@ export function evaluate(bars, enabled = STRATEGY_IDS, sessionBars = null) {
   const atr14 = atr(bars, 14);
   const session = sessionBars && sessionBars.length >= 2 ? sessionBars : bars.slice(-390);
   const sessionVwap = vwap(session);
-  const prevSessionClose = session.length >= 2 ? session[session.length - 2].c : last.c;
+  const prevClose = bars.length >= 2 ? bars[bars.length - 2].c : last.c;
   const prior = bars.slice(-21, -1);
   const resistance = Math.max(...prior.map((b) => b.h));
   const support = Math.min(...prior.map((b) => b.l));
@@ -547,9 +599,34 @@ export function evaluate(bars, enabled = STRATEGY_IDS, sessionBars = null) {
   const trendUp = ema9 > ema21 && ema21 > ema50;
   const trendDown = ema9 < ema21 && ema21 < ema50;
   const flat = ema21 > 0 ? Math.abs(ema9 / ema21 - 1) < 0.0035 : false;
-  const volOk = relvol >= 0.6;
+  const volOk = relvol >= 0.8;
   const atrPct = c > 0 ? atr14 / c : 0;
   if (atrPct > 0.05) return []; // too chaotic to size safely
+  if (atrPct > 0 && atrPct < 0.00035) return []; // too quiet to reach a useful target
+  const extVwap = sessionVwap > 0 ? c / sessionVwap - 1 : 0;
+
+  /* Higher-timeframe (normally 5-minute) confirmation. */
+  let htfUp = null;
+  let htfDown = null;
+  if (Array.isArray(ctx.htf) && ctx.htf.length >= 28) {
+    const htfCloses = ctx.htf.map((b) => b.c);
+    const h9 = ema(htfCloses, 9);
+    const h21 = ema(htfCloses, 21);
+    const h50 = ema(htfCloses, 50);
+    htfUp = h9 > h21 && h21 >= h50 * 0.999;
+    htfDown = h9 < h21 && h21 <= h50 * 1.001;
+  }
+
+  /* Relative strength versus SPY. Longs want leadership, shorts want laggards. */
+  const relative =
+    Number.isFinite(ctx.changePct) && Number.isFinite(ctx.spyChangePct)
+      ? ctx.changePct - ctx.spyChangePct
+      : null;
+  const longOk = htfUp !== false && (relative == null || relative >= -0.45);
+  const shortOk = htfDown !== false && (relative == null || relative <= 0.45);
+  const longBonus = (htfUp ? 3 : 0) + (relative != null ? clamp(relative, -2, 2) * 2.2 : 0);
+  const shortBonus = (htfDown ? 3 : 0) + (relative != null ? clamp(-relative, -2, 2) * 2.2 : 0);
+  const calmEnough = ctx.vix == null || ctx.vix < 34;
 
   const setups = [];
   const add = (id, score, reason) => {
@@ -563,72 +640,137 @@ export function evaluate(bars, enabled = STRATEGY_IDS, sessionBars = null) {
       vwap: sessionVwap,
       relvol,
       rsi: strength,
+      htf: htfUp ? 'up' : htfDown ? 'down' : 'flat',
+      relative,
     });
   };
 
   /* ---- LONG: trend pullback ---- */
   if (
     trendUp &&
+    longOk &&
     c > ema21 &&
     l <= Math.max(ema9, ema21) * 1.0015 &&
     c > ema9 &&
     bullish &&
-    strength >= 45 &&
-    strength <= 74 &&
-    volOk
+    strength >= 46 &&
+    strength <= 68 &&
+    volOk &&
+    extVwap > -0.004
   ) {
-    const score = 62 + (strength - 45) * 0.5 + Math.min(relvol, 2) * 4 + (bodyRatio > 0.5 ? 5 : 0) + (c > ema9 ? 3 : 0);
+    const score =
+      58 + (strength - 46) * 0.5 + Math.min(relvol, 2) * 4 + (bodyRatio > 0.5 ? 4 : 0) + longBonus;
     add('trend_long', score, `Uptrend pullback · RSI ${Math.round(strength)} · ${relvol.toFixed(1)}× vol`);
   }
 
   /* ---- LONG: breakout ---- */
-  if (c > resistance && bodyRatio > 0.35 && relvol >= 1.3 && strength < 82) {
-    const score = 64 + Math.min(relvol, 3.2) * 7 + bodyRatio * 8;
+  if (
+    longOk &&
+    c > resistance &&
+    bodyRatio > 0.4 &&
+    relvol >= 1.25 &&
+    strength < 78 &&
+    extVwap < 0.035 &&
+    range <= atr14 * 3.4
+  ) {
+    const score = 60 + Math.min(relvol, 3) * 7 + bodyRatio * 6 + longBonus;
     add('breakout_long', score, `New 20-bar high · ${relvol.toFixed(1)}× vol · RSI ${Math.round(strength)}`);
   }
 
   /* ---- LONG: VWAP reclaim ---- */
-  if (sessionVwap > 0 && prevSessionClose < sessionVwap && c > sessionVwap && relvol >= 1.0 && strength < 76) {
-    const score = 63 + Math.min(relvol, 3) * 6 + (c > ema9 ? 4 : 0);
+  if (
+    longOk &&
+    sessionVwap > 0 &&
+    prevClose < sessionVwap &&
+    c > sessionVwap * 1.0002 &&
+    relvol >= 1.15 &&
+    strength < 74 &&
+    extVwap < 0.02 &&
+    (ema9 > ema21 || c > ema50)
+  ) {
+    const score = 61 + Math.min(relvol, 3) * 6 + (c > ema9 ? 3 : 0) + longBonus;
     add('vwap_long', score, `Reclaimed VWAP ${sessionVwap.toFixed(2)} · ${relvol.toFixed(1)}× vol`);
   }
 
   /* ---- LONG: oversold lower-band reclaim ---- */
-  if (bb.sd > 0 && l <= bb.lower && c > bb.lower && c < bb.mid * 1.001 && strength < 36 && flat && bullish) {
-    const score = 62 + (36 - strength) * 0.9 + (c > bb.lower ? 4 : 0);
+  if (
+    bb.sd > 0 &&
+    l <= bb.lower &&
+    c > bb.lower &&
+    c < bb.mid * 1.001 &&
+    strength < 34 &&
+    flat &&
+    bullish &&
+    relvol >= 0.7 &&
+    extVwap > -0.02 &&
+    calmEnough
+  ) {
+    const score = 60 + (34 - strength) * 0.9 + bodyRatio * 4 + (relvol >= 1 ? 3 : 0);
     add('reversion_long', score, `Lower-band reclaim · RSI ${Math.round(strength)} · flat trend`);
   }
 
   /* ---- SHORT: downtrend rally ---- */
   if (
     trendDown &&
+    shortOk &&
     c < ema21 &&
     h >= Math.min(ema9, ema21) * 0.9985 &&
     c < ema9 &&
     bearish &&
-    strength >= 26 &&
-    strength <= 55 &&
-    volOk
+    strength >= 32 &&
+    strength <= 54 &&
+    volOk &&
+    extVwap < 0.004
   ) {
-    const score = 62 + (55 - strength) * 0.5 + Math.min(relvol, 2) * 4 + (bodyRatio > 0.5 ? 5 : 0) + (c < ema9 ? 3 : 0);
+    const score =
+      58 + (54 - strength) * 0.5 + Math.min(relvol, 2) * 4 + (bodyRatio > 0.5 ? 4 : 0) + shortBonus;
     add('trend_short', score, `Downtrend rally · RSI ${Math.round(strength)} · ${relvol.toFixed(1)}× vol`);
   }
 
   /* ---- SHORT: breakdown ---- */
-  if (c < support && bodyRatio > 0.35 && bearish && relvol >= 1.3 && strength > 18) {
-    const score = 64 + Math.min(relvol, 3.2) * 7 + bodyRatio * 8;
+  if (
+    shortOk &&
+    c < support &&
+    bodyRatio > 0.4 &&
+    bearish &&
+    relvol >= 1.25 &&
+    strength > 26 &&
+    extVwap > -0.035 &&
+    range <= atr14 * 3.4
+  ) {
+    const score = 60 + Math.min(relvol, 3) * 7 + bodyRatio * 6 + shortBonus;
     add('breakdown_short', score, `New 20-bar low · ${relvol.toFixed(1)}× vol · RSI ${Math.round(strength)}`);
   }
 
   /* ---- SHORT: VWAP rejection ---- */
-  if (sessionVwap > 0 && prevSessionClose > sessionVwap && c < sessionVwap && relvol >= 1.0 && strength > 24) {
-    const score = 63 + Math.min(relvol, 3) * 6 + (c < ema9 ? 4 : 0);
+  if (
+    shortOk &&
+    sessionVwap > 0 &&
+    prevClose > sessionVwap &&
+    c < sessionVwap * 0.9998 &&
+    relvol >= 1.15 &&
+    strength > 26 &&
+    extVwap > -0.02 &&
+    (ema9 < ema21 || c < ema50)
+  ) {
+    const score = 61 + Math.min(relvol, 3) * 6 + (c < ema9 ? 3 : 0) + shortBonus;
     add('vwap_short', score, `Rejected at VWAP ${sessionVwap.toFixed(2)} · ${relvol.toFixed(1)}× vol`);
   }
 
   /* ---- SHORT: overbought upper-band rejection ---- */
-  if (bb.sd > 0 && h >= bb.upper && c < bb.upper && c > bb.mid * 0.999 && strength > 64 && flat && bearish) {
-    const score = 62 + (strength - 64) * 0.9 + (c < bb.upper ? 4 : 0);
+  if (
+    bb.sd > 0 &&
+    h >= bb.upper &&
+    c < bb.upper &&
+    c > bb.mid * 0.999 &&
+    strength > 66 &&
+    flat &&
+    bearish &&
+    relvol >= 0.7 &&
+    extVwap < 0.02 &&
+    calmEnough
+  ) {
+    const score = 60 + (strength - 66) * 0.9 + bodyRatio * 4 + (relvol >= 1 ? 3 : 0);
     add('reversion_short', score, `Upper-band rejection · RSI ${Math.round(strength)} · flat trend`);
   }
 

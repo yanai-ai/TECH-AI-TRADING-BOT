@@ -13,6 +13,10 @@ import {
   newPortfolio,
   addLog,
   marketStatus,
+  classifyBar,
+  aggregateBars,
+  vwap,
+  ema,
 } from './engine.js';
 import { saveState, clearState, download, exportJSON, normalizeState } from './store.js';
 import {
@@ -26,15 +30,22 @@ import {
   relTime,
   minutesLabel,
   tone,
-  sparkline,
+  candleSpark,
+  compact,
   esc,
 } from './format.js';
+import { drawCandles } from './chart.js';
 
 let state = null;
 let bot = null;
 let currentView = 'dashboard';
+let chartSymbol = '';
+let chartInterval = 5;
+let chartHover = null;
+let chartMeta = null;
+let chartRaf = 0;
 
-const VIEWS = ['dashboard', 'watchlist', 'strategies', 'history', 'settings'];
+const VIEWS = ['dashboard', 'market', 'watchlist', 'strategies', 'history', 'settings'];
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 const icon = (name, cls = '') =>
@@ -45,6 +56,19 @@ const icon = (name, cls = '') =>
 export function initUI(ctx) {
   state = ctx.state;
   bot = ctx.bot;
+  try {
+    chartInterval = Number(localStorage.getItem('yanai.chartInterval')) || 5;
+    chartSymbol = String(localStorage.getItem('yanai.chartSymbol') || '').toUpperCase();
+  } catch {
+    chartInterval = 5;
+    chartSymbol = '';
+  }
+  if (![1, 5, 15].includes(chartInterval)) chartInterval = 5;
+  if (!state.watchlist.some((w) => w.symbol === chartSymbol)) {
+    chartSymbol = state.watchlist[0]?.symbol || '';
+  }
+  bot.setChartSymbol(chartSymbol);
+
   buildStrategies();
   buildSettings();
   wire();
@@ -135,6 +159,11 @@ function wire() {
   });
 
   $('#watchBody').addEventListener('click', (e) => {
+    const chartBtn = e.target.closest('[data-chart-symbol]');
+    if (chartBtn) {
+      setChartSymbol(chartBtn.dataset.chartSymbol);
+      return;
+    }
     const remove = e.target.closest('[data-remove-symbol]');
     if (remove) {
       const sym = remove.dataset.removeSymbol;
@@ -187,6 +216,69 @@ function wire() {
   $('#settingsRoot').addEventListener('change', onSettingsChange);
   $('#settingsRoot').addEventListener('click', onSettingsClick);
 
+  const chartSelect = $('#chartSymbol');
+  if (chartSelect) {
+    chartSelect.addEventListener('change', () => setChartSymbol(chartSelect.value));
+  }
+
+  const intervals = $('#chartIntervals');
+  if (intervals) {
+    intervals.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-interval]');
+      if (!btn) return;
+      chartInterval = Number(btn.dataset.interval) || 5;
+      chartHover = null;
+      try {
+        localStorage.setItem('yanai.chartInterval', String(chartInterval));
+      } catch {
+        /* ignore */
+      }
+      intervals.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
+      renderChart(bot.snapshot());
+    });
+  }
+
+  const candle = $('#candleChart');
+  if (candle) {
+    candle.addEventListener('mousemove', (e) => {
+      if (!chartMeta) return;
+      const rect = candle.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const idx = Math.floor((x - chartMeta.x0) / chartMeta.slot);
+      const next = idx >= 0 && idx < chartMeta.count ? idx : null;
+      if (next !== chartHover) {
+        chartHover = next;
+        scheduleChartPaint();
+      }
+    });
+    candle.addEventListener('mouseleave', () => {
+      if (chartHover !== null) {
+        chartHover = null;
+        scheduleChartPaint();
+      }
+    });
+  }
+
+  const newsBtn = $('#newsRefresh');
+  if (newsBtn) {
+    newsBtn.addEventListener('click', async () => {
+      newsBtn.disabled = true;
+      newsBtn.textContent = 'Refreshing…';
+      await bot.refreshNews(true).catch(() => {});
+      newsBtn.disabled = false;
+      newsBtn.textContent = 'Refresh';
+      renderMarket(bot.snapshot());
+    });
+  }
+
+  const marketBody = $('#marketBody');
+  if (marketBody) {
+    marketBody.addEventListener('click', (e) => {
+      const row = e.target.closest('[data-chart-symbol]');
+      if (row) setChartSymbol(row.dataset.chartSymbol);
+    });
+  }
+
   $('#exportCsv').addEventListener('click', exportTradesCsv);
   $('#exportJson').addEventListener('click', () => {
     download(`yanai-backup-${new Date().toISOString().slice(0, 10)}.json`, exportJSON(state));
@@ -194,7 +286,35 @@ function wire() {
   });
 
   window.addEventListener('resize', () => {
-    if (bot) drawEquity(bot.snapshot());
+    if (!bot) return;
+    const snap = bot.snapshot();
+    drawEquity(snap);
+    if (currentView === 'dashboard') paintChart(snap);
+  });
+}
+
+function setChartSymbol(symbol) {
+  const sym = String(symbol || '').toUpperCase();
+  if (!sym) return;
+  chartSymbol = sym;
+  chartHover = null;
+  try {
+    localStorage.setItem('yanai.chartSymbol', sym);
+  } catch {
+    /* ignore */
+  }
+  bot.setChartSymbol(sym);
+  const sel = $('#chartSymbol');
+  if (sel) sel.value = sym;
+  if (currentView !== 'dashboard') setView('dashboard');
+  else renderChart(bot.snapshot());
+}
+
+function scheduleChartPaint() {
+  if (chartRaf) return;
+  chartRaf = requestAnimationFrame(() => {
+    chartRaf = 0;
+    if (bot && state && currentView === 'dashboard') paintChart(bot.snapshot());
   });
 }
 
@@ -212,6 +332,9 @@ export function render() {
   renderWatch(snap);
   renderSignalBoard(snap);
   syncStrategies();
+  renderStrategyStats();
+  if (currentView === 'dashboard') renderChart(snap);
+  if (currentView === 'market') renderMarket(snap);
   if (currentView === 'history') renderHistory();
   renderFooter(snap);
 }
@@ -230,6 +353,10 @@ function setView(name, updateHash = true) {
   }
   if (name === 'settings') syncSettings();
   if (name === 'strategies') syncStrategies();
+  if (name === 'market') {
+    bot.refreshIndices().catch(() => {});
+    bot.refreshNews().catch(() => {});
+  }
   render();
 }
 
@@ -451,6 +578,342 @@ function drawEquity(snap) {
   }
 }
 
+/* =============================================================== candle chart */
+
+function sessionBarsFor(symbol) {
+  const raw = bot.bars[symbol] || [];
+  if (raw.length < 3) return [];
+  const today = bot.status?.date || marketStatus().date;
+  const regular = [];
+  for (const b of raw) {
+    const cls = classifyBar(b.t);
+    if (cls.session === 'regular') regular.push({ ...b, d: cls.d });
+  }
+  if (!regular.length) return [];
+  const todayBars = regular.filter((b) => b.d === today);
+  if (todayBars.length >= 3) return todayBars;
+  /* Market closed: show the most recent session that has candles. */
+  const lastDay = regular[regular.length - 1].d;
+  return regular.filter((b) => b.d === lastDay);
+}
+
+function renderChart(snap) {
+  const canvas = $('#candleChart');
+  if (!canvas) return;
+
+  const symbols = [...new Set([
+    ...state.watchlist.map((w) => w.symbol),
+    ...Object.keys(state.portfolio.positions),
+  ])];
+  if (!symbols.includes(chartSymbol)) {
+    chartSymbol = symbols[0] || '';
+    if (chartSymbol) bot.setChartSymbol(chartSymbol);
+  }
+
+  const select = $('#chartSymbol');
+  if (select) {
+    const sig = symbols.join(',');
+    if (select.dataset.sig !== sig) {
+      select.innerHTML = symbols.map((s) => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+      select.dataset.sig = sig;
+    }
+    select.value = chartSymbol;
+  }
+
+  const badge = $('#chartBadge');
+  if (badge) badge.textContent = chartSymbol || '—';
+
+  const empty = $('#candleEmpty');
+  if (!chartSymbol) {
+    if (empty) {
+      empty.textContent = 'Add a ticker to see its chart.';
+      empty.style.display = 'grid';
+    }
+    return;
+  }
+
+  const raw = bot.bars[chartSymbol];
+  if (!raw || raw.length < 2) {
+    bot.ensureBars(chartSymbol);
+    if (empty) {
+      empty.textContent = `Loading ${chartSymbol} candles…`;
+      empty.style.display = 'grid';
+    }
+    return;
+  }
+
+  paintChart(snap);
+}
+
+function paintChart(snap) {
+  const canvas = $('#candleChart');
+  if (!canvas || !chartSymbol) return;
+  const raw = sessionBarsFor(chartSymbol);
+  if (!raw.length) {
+    chartMeta = null;
+    const empty = $('#candleEmpty');
+    if (empty) {
+      empty.textContent = `No candles yet for ${chartSymbol}.`;
+      empty.style.display = 'grid';
+    }
+    return;
+  }
+
+  const bars = aggregateBars(raw, chartInterval);
+  const vwapLine = raw.length >= 2 ? vwap(raw) : 0;
+  const position = state.portfolio.positions[chartSymbol] || null;
+  const meta = drawCandles(canvas, bars, {
+    interval: chartInterval,
+    vwapLine,
+    position,
+    hover: chartHover,
+  });
+  chartMeta = meta;
+
+  const empty = $('#candleEmpty');
+  if (empty) empty.style.display = meta ? 'none' : 'grid';
+  if (!meta && empty) empty.textContent = `No ${chartInterval}-minute candles yet for ${chartSymbol}.`;
+
+  const q = snap.quotes[chartSymbol];
+  const note = $('#chartNote');
+  if (note) {
+    const pos = position
+      ? ` <span class="badge badge-${position.side === 'LONG' ? 'long' : 'short'}">${position.side} ${position.qty}</span>`
+      : '';
+    note.innerHTML = q
+      ? `<span class="${tone(q.changePct)}">${price(q.price)} · ${signedPct(q.changePct)}</span>${pos}`
+      : pos;
+  }
+
+  const legend = $('#candleLegend');
+  if (legend) {
+    const closes = bars.map((b) => b.c);
+    const last = bars[bars.length - 1];
+    legend.innerHTML = [
+      ['EMA 9', ema(closes, 9), 'ema9'],
+      ['EMA 21', ema(closes, 21), 'ema21'],
+      ['EMA 50', ema(closes, 50), 'ema50'],
+      ['VWAP', vwapLine, 'vwap'],
+    ]
+      .map(
+        ([label, value, cls]) =>
+          `<span class="legend-item"><i class="lg-${cls}"></i>${label} <b>${price(value)}</b></span>`,
+      )
+      .join('')
+      .concat(last ? `<span class="legend-item legend-vol">Vol <b>${compact(last.v)}</b></span>` : '');
+  }
+}
+
+/* =============================================================== market pulse */
+
+const INDEX_META = {
+  '.SPX': { label: 'S&P 500', short: 'SPX' },
+  '.IXIC': { label: 'Nasdaq Composite', short: 'COMP' },
+  '.DJI': { label: 'Dow Jones', short: 'DJI' },
+  IWM: { label: 'Russell 2000', short: 'IWM' },
+  '.VIX': { label: 'VIX', short: 'VIX', inverse: true },
+  US10Y: { label: '10-Year Treasury', short: '10Y', suffix: '%' },
+  '@CL.1': { label: 'Crude Oil', short: 'WTI' },
+  '@GC.1': { label: 'Gold', short: 'GOLD' },
+};
+
+const SECTOR_NAMES = {
+  XLK: 'Technology',
+  XLF: 'Financials',
+  XLE: 'Energy',
+  XLV: 'Health care',
+  XLI: 'Industrials',
+  XLY: 'Consumer disc.',
+  XLP: 'Consumer staples',
+  XLU: 'Utilities',
+  XLB: 'Materials',
+  XLRE: 'Real estate',
+  XLC: 'Communication',
+};
+
+function renderMarket(snap) {
+  renderIndices(snap);
+  renderBreadth(snap);
+  renderMarketBody(snap);
+  renderSectors(snap);
+  renderNews(snap);
+}
+
+function renderIndices(snap) {
+  const grid = $('#indexGrid');
+  if (!grid) return;
+  const list = snap.indices || [];
+  const note = $('#marketNote');
+  if (!list.length) {
+    grid.innerHTML = '<div class="index-empty">Waiting for the market tape…</div>';
+    if (note) note.textContent = 'Quotes refresh every 30 seconds';
+    return;
+  }
+  if (note) note.textContent = `Updated ${relTime(bot.feed.lastQuoteAt || Date.now())} · refreshes every 30s`;
+  grid.innerHTML = list
+    .map((q) => {
+      const meta = INDEX_META[q.symbol] || { label: q.name || q.symbol, short: q.symbol };
+      const effective = meta.inverse ? -q.changePct : q.changePct;
+      const cls = tone(effective);
+      const value = meta.suffix ? `${Number(q.price).toFixed(2)}${meta.suffix}` : price(q.price);
+      return `<article class="index-tile ${cls}">
+        <div class="it-top"><span class="it-name">${esc(meta.label)}</span><span class="it-sym">${esc(meta.short)}</span></div>
+        <div class="it-value">${value}</div>
+        <div class="it-chg ${cls}">${signedPct(q.changePct)}</div>
+      </article>`;
+    })
+    .join('');
+}
+
+function renderBreadth(snap) {
+  const el = $('#breadth');
+  if (!el) return;
+  const spy = snap.quotes.SPY?.changePct;
+  const quoted = state.watchlist
+    .map((w) => ({ w, q: snap.quotes[w.symbol] }))
+    .filter((x) => x.q && Number.isFinite(x.q.changePct));
+  const up = quoted.filter((x) => x.q.changePct > 0).length;
+  const down = quoted.filter((x) => x.q.changePct < 0).length;
+  const flat = quoted.length - up - down;
+  const avg = quoted.length
+    ? quoted.reduce((s, x) => s + x.q.changePct, 0) / quoted.length
+    : 0;
+  const total = Math.max(1, quoted.length);
+  const note = $('#breadthNote');
+  if (note) note.textContent = `${quoted.length} of ${state.watchlist.length} quoted`;
+
+  if (!quoted.length) {
+    el.innerHTML = '<div class="breadth-empty">Quotes arrive as soon as the feed connects.</div>';
+    return;
+  }
+
+  el.innerHTML = `<div class="breadth-bar">
+      <span class="b-up" style="width:${((up / total) * 100).toFixed(1)}%"></span>
+      <span class="b-flat" style="width:${((flat / total) * 100).toFixed(1)}%"></span>
+      <span class="b-down" style="width:${((down / total) * 100).toFixed(1)}%"></span>
+    </div>
+    <div class="breadth-legend">
+      <span><i class="b-dot up"></i>${up} up</span>
+      <span><i class="b-dot flat"></i>${flat} flat</span>
+      <span><i class="b-dot down"></i>${down} down</span>
+      <span class="breadth-avg ${tone(avg)}">Average ${signedPct(avg)}</span>
+      ${spy != null ? `<span class="breadth-spy">SPY ${signedPct(spy)}</span>` : ''}
+    </div>`;
+}
+
+function renderMarketBody(snap) {
+  const body = $('#marketBody');
+  if (!body) return;
+  const spy = snap.quotes.SPY?.changePct;
+  const threshold = state.settings.threshold;
+  const changeOf = (x) => (x.q && Number.isFinite(x.q.changePct) ? x.q.changePct : -999);
+  const rows = state.watchlist
+    .map((w) => ({ w, q: snap.quotes[w.symbol] }))
+    .sort((a, b) => changeOf(b) - changeOf(a))
+    .map(({ w, q }) => {
+      const sig = snap.signals[w.symbol]?.setups?.[0];
+      const rs = q && spy != null ? q.changePct - spy : null;
+      const signalCell = sig
+        ? `<span class="chip ${sig.side === 'LONG' ? 'long' : 'short'}" title="${esc(sig.reason)}">
+            <span class="dot"></span>${esc(STRATEGY_MAP[sig.id]?.name || sig.id)}
+            <span class="score ${sig.score >= threshold ? 'hot' : ''}">${sig.score}</span>
+          </span>`
+        : '<span class="chip watch">—</span>';
+      return `<tr class="mkt-row" data-chart-symbol="${esc(w.symbol)}">
+        <td><div class="sym"><strong>${esc(w.symbol)}</strong><span>${esc(w.name)}</span></div></td>
+        <td class="num">${q ? price(q.price) : '—'}</td>
+        <td class="num ${q ? tone(q.changePct) : 'flat'}">${q ? signedPct(q.changePct) : '—'}</td>
+        <td class="num ${rs == null ? 'flat' : tone(rs)}">${rs == null ? '—' : `${rs > 0 ? '+' : ''}${rs.toFixed(2)}pp`}</td>
+        <td>${signalCell}</td>
+      </tr>`;
+    })
+    .join('');
+  body.innerHTML = rows || '<tr><td colspan="5" class="table-empty">Add tickers to see how they are doing.</td></tr>';
+}
+
+function renderSectors(snap) {
+  const grid = $('#sectorGrid');
+  if (!grid) return;
+  const list = snap.sectors || [];
+  if (!list.length) {
+    grid.innerHTML = '<div class="index-empty">Sector quotes load with the market tape.</div>';
+    return;
+  }
+  grid.innerHTML = list
+    .map((q) => {
+      const chg = Number(q.changePct) || 0;
+      const cls = tone(chg);
+      const intensity = Math.min(0.32, 0.07 + Math.abs(chg) * 0.045);
+      const bg =
+        chg > 0
+          ? `rgba(52,211,153,${intensity.toFixed(3)})`
+          : chg < 0
+            ? `rgba(248,113,113,${intensity.toFixed(3)})`
+            : 'rgba(255,255,255,0.03)';
+      return `<article class="sector-tile ${cls}" style="background:${bg}">
+        <span class="st-name">${esc(SECTOR_NAMES[q.symbol] || q.name || q.symbol)}</span>
+        <span class="st-sym">${esc(q.symbol)}</span>
+        <span class="st-chg ${cls}">${signedPct(chg)}</span>
+      </article>`;
+    })
+    .join('');
+}
+
+function renderNews(snap) {
+  const list = $('#newsList');
+  if (!list) return;
+  const news = snap.news || { general: [], bySymbol: [], at: 0 };
+  const seen = new Set();
+  const items = [];
+  for (const item of news.general || []) {
+    if (!item || !item.url || seen.has(item.url)) continue;
+    seen.add(item.url);
+    items.push({ ...item, symbol: '' });
+  }
+  for (const group of news.bySymbol || []) {
+    for (const item of group.items || []) {
+      if (!item || !item.url || seen.has(item.url)) continue;
+      seen.add(item.url);
+      items.push({ ...item, symbol: group.symbol });
+    }
+  }
+  items.sort((a, b) => b.date - a.date);
+
+  const note = $('#newsNote');
+  if (note) {
+    if (items.length) note.textContent = `${items.length} stories · updated ${relTime(news.at)}`;
+    else if (snap.newsError) note.textContent = snap.newsError;
+    else note.textContent = 'Headlines load every few minutes';
+  }
+
+  if (!items.length) {
+    list.innerHTML = snap.newsError
+      ? `<div class="news-empty">Could not load headlines right now. ${esc(snap.newsError)}</div>`
+      : '<div class="news-empty">Loading the latest CNBC headlines…</div>';
+    return;
+  }
+
+  list.innerHTML = items
+    .slice(0, 12)
+    .map((item) => {
+      const summary =
+        item.summary && item.summary.length > 12
+          ? `<p class="news-summary">${esc(item.summary.slice(0, 190))}${item.summary.length > 190 ? '…' : ''}</p>`
+          : '';
+      return `<article class="news-item">
+        <div class="news-top">
+          <span class="news-src">CNBC</span>
+          <span class="news-time">${relTime(item.date)}</span>
+          ${item.symbol ? `<span class="news-sym">${esc(item.symbol)}</span>` : '<span class="news-sym market">Market</span>'}
+        </div>
+        <a class="news-title" href="${esc(item.url)}" target="_blank" rel="noopener">${esc(item.title)}</a>
+        ${summary}
+        ${item.section ? `<span class="news-section">${esc(item.section)}</span>` : ''}
+      </article>`;
+    })
+    .join('');
+}
+
 function renderFooter(snap) {
   const foot = $('#footFeed');
   if (!foot) return;
@@ -646,9 +1109,10 @@ function renderWatch(snap) {
       const sig = snap.signals[w.symbol];
       const best = sig && sig.setups.length ? sig.setups[0] : null;
       const bars = bot.bars[w.symbol] || [];
-      const closes = bars.slice(-40).map((b) => b.c);
-      const spark = closes.length >= 2 ? sparkline(closes) : '';
-      const sparkTone = closes.length >= 2 ? tone(closes[closes.length - 1] - closes[0]) : 'flat';
+      const chartBars = sig && sig.session && sig.session.length >= 3 ? sig.session : bars;
+      const candles = candleSpark(chartBars, 24);
+      const sparkTone =
+        chartBars.length >= 2 ? tone(chartBars[chartBars.length - 1].c - chartBars[0].c) : 'flat';
       const pos = state.portfolio.positions[w.symbol];
       const positionBadge = pos
         ? ` <span class="badge badge-${pos.side === 'LONG' ? 'long' : 'short'}">${pos.side}</span>`
@@ -673,8 +1137,10 @@ function renderWatch(snap) {
         <td class="num">${q ? price(q.price) : '—'}</td>
         <td class="num ${q ? tone(q.changePct) : 'flat'}">${q ? signedPct(q.changePct) : '—'}</td>
         <td>${
-          spark
-            ? `<svg class="spark ${sparkTone}" viewBox="0 0 88 26" preserveAspectRatio="none"><path d="${spark}"/></svg>`
+          candles
+            ? `<button class="mini-chart" type="button" data-chart-symbol="${esc(w.symbol)}" title="Open ${esc(w.symbol)} candlestick chart">
+                 <svg class="spark-candles ${sparkTone}" viewBox="0 0 88 26" preserveAspectRatio="none">${candles}</svg>
+               </button>`
             : '<span class="flat">—</span>'
         }</td>
         <td>${signalCell}</td>
@@ -768,41 +1234,118 @@ function syncStrategies() {
   }
 }
 
+/* Closed-trade results per strategy, so weak setups are easy to switch off. */
+function renderStrategyStats() {
+  const body = $('#strategyStats');
+  if (!body) return;
+  const stats = new Map();
+  for (const t of state.portfolio.trades) {
+    if (!t || t.action !== 'CLOSE' || !STRATEGY_MAP[t.strategy]) continue;
+    const row = stats.get(t.strategy) || { trades: 0, wins: 0, pnl: 0 };
+    const pnl = Number(t.pnl) || 0;
+    row.trades += 1;
+    row.pnl += pnl;
+    if (pnl > 0) row.wins += 1;
+    stats.set(t.strategy, row);
+  }
+
+  const note = $('#strategyStatsNote');
+  if (!stats.size) {
+    body.innerHTML =
+      '<tr><td colspan="5" class="table-empty">No closed trades yet. Results appear here as the bot trades.</td></tr>';
+    if (note) note.textContent = 'Closed trades only';
+    return;
+  }
+
+  const total = [...stats.values()].reduce((sum, s) => sum + s.trades, 0);
+  if (note) note.textContent = `${total} closed trade${total === 1 ? '' : 's'}`;
+  body.innerHTML = [...stats.entries()]
+    .sort((a, b) => b[1].pnl - a[1].pnl)
+    .map(([id, s]) => {
+      const meta = STRATEGY_MAP[id];
+      const winRate = Math.round((s.wins / s.trades) * 100);
+      return `<tr>
+        <td><div class="sym"><strong>${esc(meta.name)}</strong><span>${esc(meta.tag)}</span></div></td>
+        <td><span class="badge badge-${meta.side === 'LONG' ? 'long' : 'short'}">${meta.side}</span></td>
+        <td class="num">${s.trades}</td>
+        <td class="num">${winRate}%</td>
+        <td class="num ${tone(s.pnl)}">${signedMoney(s.pnl)}</td>
+      </tr>`;
+    })
+    .join('');
+}
+
 /* ================================================================== settings */
 
 const SETTING_GROUPS = [
   {
+    key: 'sizing',
     title: 'Position sizing',
+    blurb: 'How much money the bot puts behind each idea.',
     fields: [
-      { key: 'riskPct', label: 'Risk per trade', suffix: '%', min: 0.05, max: 2, step: 0.05, hint: 'Equity risked between entry and stop.' },
-      { key: 'maxPositions', label: 'Max open positions', min: 1, max: 10, step: 1, hint: 'Concurrent paper positions.' },
-      { key: 'maxAllocPct', label: 'Max per position', suffix: '%', min: 2, max: 50, step: 1, hint: 'Cap on a single position\u2019s notional.' },
-      { key: 'maxGrossLeverage', label: 'Max gross leverage', suffix: 'x', min: 1, max: 3, step: 0.1, hint: 'Total exposure versus equity.' },
+      { key: 'riskPct', label: 'Risk per trade', suffix: '%', min: 0.05, max: 2, step: 0.05, hint: 'How much of the account you lose if the stop is hit. 0.5% of $100,000 is $500.' },
+      { key: 'maxPositions', label: 'Max open positions', min: 1, max: 10, step: 1, hint: 'The most trades the bot can hold at the same time.' },
+      { key: 'maxAllocPct', label: 'Max per position', suffix: '%', min: 2, max: 50, step: 1, hint: 'The biggest one position can become. 20% of $100,000 is $20,000.' },
+      { key: 'maxGrossLeverage', label: 'Max gross leverage', suffix: '\u00d7', min: 1, max: 3, step: 0.1, hint: 'Total money at work compared with the account. 1.5\u00d7 means up to $150,000 of positions on $100,000.' },
     ],
   },
   {
+    key: 'exits',
     title: 'Stops & targets',
+    blurb: 'When the bot gives up on a trade, and when it takes profit.',
     fields: [
-      { key: 'stopPct', label: 'Stop distance', suffix: '%', min: 0.15, max: 5, step: 0.05, hint: 'Minimum stop, as a percent of price.' },
-      { key: 'atrMult', label: 'ATR stop multiple', suffix: 'x', min: 0.5, max: 4, step: 0.1, hint: 'Stop = ATR \u00d7 this, when wider.' },
-      { key: 'targetR', label: 'Target', suffix: 'R', min: 0.5, max: 6, step: 0.1, hint: 'Profit target in units of risk.' },
-      { key: 'trailTriggerR', label: 'Trail after', suffix: 'R', min: 0.2, max: 4, step: 0.1, hint: 'Start trailing once this much is earned.' },
-      { key: 'trailPct', label: 'Trail distance', suffix: '%', min: 0, max: 4, step: 0.05, hint: 'Distance behind the best price.' },
+      { key: 'stopPct', label: 'Stop distance', suffix: '%', min: 0.15, max: 5, step: 0.05, hint: 'How far price can move against you before the stop closes the trade. 0.8% on a $100 stock is $0.80.' },
+      { key: 'atrMult', label: 'ATR stop multiple', suffix: '\u00d7', min: 0.5, max: 4, step: 0.1, hint: 'Widens the stop when a stock is moving a lot, so normal noise does not knock you out.' },
+      { key: 'targetR', label: 'Profit target', suffix: 'R', min: 0.5, max: 6, step: 0.1, hint: 'Where the bot takes profit, measured in risk. 2R means it aims to make twice what it risks.' },
+      { key: 'trailTriggerR', label: 'Start trailing after', suffix: 'R', min: 0.2, max: 4, step: 0.1, hint: 'Once the trade is up this much, the stop starts following the price.' },
+      { key: 'trailPct', label: 'Trailing distance', suffix: '%', min: 0, max: 4, step: 0.05, hint: 'How far behind the best price the stop follows. Smaller = quicker to lock in gains.' },
+      { key: 'timeStopMin', label: 'Time stop', suffix: 'min', min: 0, max: 240, step: 5, hint: 'If a trade has gone nowhere for this long, close it and free the capital. 0 turns this off.' },
     ],
   },
   {
+    key: 'limits',
     title: 'Limits & pacing',
+    blurb: 'Guard rails that stop the bot from overtrading or digging a hole.',
     fields: [
-      { key: 'dailyLossPct', label: 'Daily loss limit', suffix: '%', min: 0.2, max: 8, step: 0.1, hint: 'Stop entries for the day at this loss.' },
-      { key: 'maxTradesPerDay', label: 'Max entries per day', min: 1, max: 60, step: 1 },
-      { key: 'cooldownMin', label: 'Cooldown after exit', suffix: 'min', min: 0, max: 60, step: 1, hint: 'Wait before re-entering a symbol.' },
-      { key: 'entryCutoffMin', label: 'No entries before close', suffix: 'min', min: 0, max: 60, step: 1 },
-      { key: 'minBars', label: 'Warm-up bars', min: 5, max: 60, step: 1, hint: 'Session minutes required before trading.' },
-      { key: 'threshold', label: 'Signal threshold', min: 40, max: 95, step: 1, hint: 'Minimum score (0\u201399) to open a trade.' },
-      { key: 'slippageBps', label: 'Slippage', suffix: 'bps', min: 0, max: 25, step: 1, hint: 'Adverse fill applied to entries and exits.' },
+      { key: 'dailyLossPct', label: 'Daily loss limit', suffix: '%', min: 0.2, max: 8, step: 0.1, hint: 'After losing this much in one day, the bot stops opening new trades until tomorrow.' },
+      { key: 'maxTradesPerDay', label: 'Max entries per day', min: 1, max: 1000, step: 1, hint: 'A safety cap. 1000 is effectively unlimited; open-position and cooldown limits still apply.' },
+      { key: 'cooldownMin', label: 'Cooldown after exit', suffix: 'min', min: 0, max: 60, step: 1, hint: 'Wait this long before trading the same stock again. After a loss it waits twice as long.' },
+      { key: 'entryCutoffMin', label: 'No new trades before close', suffix: 'min', min: 0, max: 60, step: 1, hint: 'Stops opening trades this close to the closing bell, when moves are less reliable.' },
+      { key: 'minBars', label: 'Warm-up time', suffix: 'min', min: 5, max: 60, step: 1, hint: 'Minutes of trading the bot watches before it will act, so its indicators have data.' },
+      { key: 'threshold', label: 'Signal threshold', min: 40, max: 95, step: 1, hint: 'How picky the bot is. Higher means fewer trades and usually better quality.' },
+      { key: 'maxChasePct', label: 'Max chase', suffix: '%', min: 0.05, max: 2, step: 0.05, hint: 'Skip a trade if price has already run this far past the signal. Prevents buying the top of a spike.' },
+      { key: 'slippageBps', label: 'Slippage', suffix: 'bps', min: 0, max: 25, step: 1, hint: 'A small bad-fill penalty on every trade, to keep results realistic. 2 bps = 0.02%.' },
     ],
   },
 ];
+
+const HELP = {
+  sizing: {
+    title: 'Position sizing, in plain English',
+    html: `<p><strong>Risk per trade</strong> is the one number that matters most. At 0.5%, a $100,000 account risks about $500 on each trade. The bot then sizes the position so that if the stop is hit, the loss is close to that amount.</p>
+      <p><strong>Max per position</strong> stops one trade from becoming too large, even if its stop is very tight. <strong>Max gross leverage</strong> caps the total value of all open positions.</p>
+      <p class="help-tip">Tip: leave these at the Balanced preset until you have a reason to change them.</p>`,
+  },
+  exits: {
+    title: 'Stops, targets and trailing, simply',
+    html: `<p>The <strong>stop</strong> is where the bot admits the idea was wrong. The <strong>target</strong> is where it takes profit. Both are measured from the entry price.</p>
+      <p><strong>Target 2R</strong> means the bot aims to make twice what it risks. If the stop is $1 away, the target is $2 away.</p>
+      <p>Once a trade is up by <strong>Start trailing after</strong>, the stop begins to follow the best price. At 1R the stop is also locked in at breakeven, so a winner cannot turn into a loser. The <strong>time stop</strong> closes trades that go nowhere and ties up your capital.</p>`,
+  },
+  limits: {
+    title: 'Limits and pacing, simply',
+    html: `<p><strong>Daily loss limit</strong>: if the account is down this much in a day, the bot stops opening new trades until tomorrow. Open positions still keep their stops.</p>
+      <p><strong>Max entries per day</strong> is only a backstop. At 1000 it is effectively unlimited, because the bot is already limited by open positions, the warm-up, and the cooldown.</p>
+      <p><strong>Signal threshold</strong> controls quality. Every setup is scored 0–99; a higher threshold means fewer, pickier trades. <strong>Max chase</strong> skips a signal if the price has already run away from the trigger candle.</p>`,
+  },
+  session: {
+    title: 'Session and behaviour',
+    html: `<p><strong>End of day</strong>: <em>Close</em> flattens every position five minutes before the bell. <em>Hold</em> carries them overnight, but stops only run while this page is open.</p>
+      <p><strong>Short selling</strong> lets the bot profit from falling stocks. Turn it off for long-only trading.</p>
+      <p><strong>Regime filter</strong> uses SPY's trend: it avoids long trades in a clear downtrend and short trades in a clear uptrend. It also makes the bot pickier when the VIX is high.</p>
+      <p><strong>Auto-start</strong> begins trading as soon as the page opens. It is off by default, so the bot always starts paused.</p>`,
+  },
+};
 
 const PROFILE_BLURB = {
   conservative: 'Smaller size, tighter stops',
@@ -859,26 +1402,34 @@ function buildSettings() {
     <div class="settings-grid">
       ${SETTING_GROUPS.map(
         (group) => `<div class="panel">
-          <div class="panel-head"><h2>${esc(group.title)}</h2></div>
+          <div class="panel-head wrap">
+            <h2>${esc(group.title)}</h2>
+            <button class="help-btn" type="button" data-help="${esc(group.key)}" aria-label="Explain ${esc(group.title)}">?</button>
+          </div>
           <div class="setting-body">
+            ${group.blurb ? `<p class="panel-note">${esc(group.blurb)}</p>` : ''}
             <div class="fields">${group.fields.map(fieldHtml).join('')}</div>
           </div>
         </div>`,
       ).join('')}
 
       <div class="panel">
-        <div class="panel-head"><h2>Session &amp; behaviour</h2></div>
+        <div class="panel-head wrap">
+          <h2>Session &amp; behaviour</h2>
+          <button class="help-btn" type="button" data-help="session" aria-label="Explain session and behaviour">?</button>
+        </div>
         <div class="setting-body">
+          <p class="panel-note">When the bot is allowed to trade, and what it does at the close.</p>
           <div class="field">
             <label for="set-eodMode">End of day</label>
             <select id="set-eodMode" data-setting="eodMode">
               <option value="close">Close positions before the bell</option>
               <option value="hold">Hold positions overnight</option>
             </select>
-            <span class="hint">Closing flattens everything 5 minutes before the close.</span>
+            <span class="hint">Closing flattens everything 5 minutes before the close. Holding is riskier because stops only run while this page is open.</span>
           </div>
-          ${toggleRow('allowShorts', 'Short selling', 'Enable the short strategies. Turn off for long-only trading.')}
-          ${toggleRow('regimeFilter', 'Regime filter', 'Uses SPY to skip longs in a downtrend and shorts in an uptrend.')}
+          ${toggleRow('allowShorts', 'Short selling', 'Let the bot profit when stocks fall. Turn off for long-only trading.')}
+          ${toggleRow('regimeFilter', 'Regime filter', 'Follows SPY\u2019s trend and gets pickier when the VIX (fear gauge) is high.')}
           ${toggleRow('autoStart', 'Auto-start', 'Start trading automatically when the page opens. Off by default.')}
         </div>
       </div>
@@ -954,6 +1505,13 @@ function onSettingsChange(e) {
 }
 
 function onSettingsClick(e) {
+  const help = e.target.closest('[data-help]');
+  if (help) {
+    const entry = HELP[help.dataset.help];
+    if (entry) explainDialog(entry);
+    return;
+  }
+
   const toggle = e.target.closest('[data-toggle-setting]');
   if (toggle) {
     const key = toggle.dataset.toggleSetting;
@@ -1204,6 +1762,35 @@ function confirmDialog({ title, body, confirmLabel = 'Confirm', cancelLabel = 'C
     $('[data-modal-cancel]', root).addEventListener('click', () => done(false));
     $('[data-modal-ok]', root).addEventListener('click', () => done(true));
   });
+}
+
+/* Read-only explainer used by the “?” buttons on the settings screen. */
+function explainDialog({ title, html }) {
+  const root = $('#modalRoot');
+  root.innerHTML = `<div class="modal modal-explain" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <h3 id="modalTitle">${esc(title)}</h3>
+    <div class="modal-body">${html}</div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" type="button" data-modal-ok>Got it</button>
+    </div>
+  </div>`;
+  root.classList.add('open');
+
+  const onKey = (e) => {
+    if (e.key === 'Escape') done();
+  };
+  const onBackdrop = (e) => {
+    if (e.target === root) done();
+  };
+  const done = () => {
+    root.classList.remove('open');
+    root.innerHTML = '';
+    document.removeEventListener('keydown', onKey);
+    root.removeEventListener('click', onBackdrop);
+  };
+  document.addEventListener('keydown', onKey);
+  root.addEventListener('click', onBackdrop);
+  $('[data-modal-ok]', root).addEventListener('click', done);
 }
 
 

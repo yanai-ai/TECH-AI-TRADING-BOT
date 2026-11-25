@@ -20,6 +20,28 @@ const MAX_WATCH = 30;
 
 const isNum = (n) => typeof n === 'number' && Number.isFinite(n);
 
+/* Old profile defaults that were replaced by the 1,000-trade cap. */
+const LEGACY_TRADE_CAPS = new Set([12, 20, 30]);
+
+function migrate(raw) {
+  if (!raw || typeof raw !== 'object') return raw;
+  const version = String(raw.version || '0.0.0');
+  if (version >= '2.0.0') return raw;
+
+  const settings = raw.settings && typeof raw.settings === 'object' ? { ...raw.settings } : null;
+  if (settings) {
+    const cap = Number(settings.maxTradesPerDay);
+    if (!Number.isFinite(cap) || LEGACY_TRADE_CAPS.has(cap)) {
+      settings.maxTradesPerDay = 1000;
+    }
+    if (!Number.isFinite(Number(settings.maxChasePct))) settings.maxChasePct = 0.4;
+    if (!Number.isFinite(Number(settings.timeStopMin))) settings.timeStopMin = 45;
+    raw.settings = settings;
+  }
+  raw.version = VERSION;
+  return raw;
+}
+
 function normalizePosition(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const side = raw.side === 'SHORT' ? 'SHORT' : raw.side === 'LONG' ? 'LONG' : null;
@@ -89,6 +111,7 @@ function normalizePortfolio(raw, settings) {
 
 export function normalizeState(raw) {
   if (!raw || typeof raw !== 'object') return null;
+  raw = migrate(raw);
   const settings = normalizeSettings(raw.settings || {});
   const now = Date.now();
   const watchlist = Array.isArray(raw.watchlist)
