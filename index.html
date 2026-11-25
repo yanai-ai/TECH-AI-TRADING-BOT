@@ -1,520 +1,312 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#101512">
-  <meta name="market-api" content="port/8765">
-  <title>Afterbell | Paper Trading Terminal</title>
-  <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="./style.css">
-  <script type="module" src="./app.mjs"></script>
-</head>
-<body>
-  <a class="skip" href="#main">Skip to dashboard</a>
-  <header class="topbar">
-    <div class="brand"><span class="brand-type">afterbell<span>.</span></span><span class="brand-divider"></span><span class="brand-label">PAPER TERMINAL</span></div>
-    <div class="top-right">
-      <span class="market-label" id="marketBadge"><i></i><span id="marketLabel">Market clock</span></span>
-      <span class="header-divider"></span><span id="clock" class="mono">--:--:-- ET</span>
-      <button class="icon-btn" aria-label="Data connection" data-action="connection" title="Data connection"><span data-icon="settings"></span></button>
-    </div>
-  </header>
-  <div class="shell">
-    <aside class="rail">
-      <div class="rail-body">
-        <div class="eyebrow rail-caption">WORKSPACE</div>
-        <nav id="nav" aria-label="Workspace">
-          <button data-page="overview" aria-current="page"><span data-icon="grid"></span>Overview</button>
-          <button data-page="watchlist"><span data-icon="list"></span>Watchlist</button>
-          <button data-page="strategies"><span data-icon="layers"></span>Strategies</button>
-          <button data-page="journal"><span data-icon="book"></span>Trade journal</button>
-        </nav>
-        <div class="rail-rule"></div>
-        <div class="eyebrow rail-caption">MARKET SESSIONS <span>ET</span></div>
-        <div id="sessionList" class="session-list"></div>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>YANAI TRADING — Live Paper Trading Terminal</title>
+    <meta
+      name="description"
+      content="YANAI TRADING is a browser-based paper trading terminal that trades real US market prices with long and short strategies. No sign-up, no API key."
+    />
+    <meta name="theme-color" content="#080b11" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23080b11'/%3E%3Cpath d='M18 18l14 16 14-16' stroke='%2334d399' stroke-width='6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M32 34v14' stroke='%2334d399' stroke-width='6' stroke-linecap='round'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <svg class="sprite" aria-hidden="true" focusable="false">
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none" /></symbol>
+      <symbol id="i-pause" viewBox="0 0 24 24"><rect x="7" y="5" width="3.6" height="14" rx="1.2" fill="currentColor" stroke="none" /><rect x="13.4" y="5" width="3.6" height="14" rx="1.2" fill="currentColor" stroke="none" /></symbol>
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6.5 7l.8 12.2a1.6 1.6 0 0 0 1.6 1.5h6.2a1.6 1.6 0 0 0 1.6-1.5L17.5 7M10 11v6M14 11v6" /></symbol>
+      <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" /></symbol>
+      <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 19h14" /></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.4 5.7M20 5v6h-6" /></symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 14h5l-1 7 8-11h-5l1-7z" /></symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.2-2.9 7.7-7 9-4.1-1.3-7-4.8-7-9V6l7-3z" /></symbol>
+      <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4" /><path d="M12 7.6V12l3 2" /></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.4" /><path d="M16 16l4.2 4.2" /></symbol>
+      <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7" /></symbol>
+    </svg>
+
+    <div class="app">
+      <div class="chrome">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark"><span>Y</span></div>
+          <div class="brand-text">
+            <div class="brand-name">YANAI <em>TRADING</em></div>
+            <div class="brand-sub">Live paper terminal</div>
+          </div>
+        </div>
+
+        <div class="market">
+          <span class="status-pill" id="statusPill">
+            <span class="dot" id="statusDot"></span>
+            <span id="statusLabel">Checking market…</span>
+          </span>
+          <span class="clock" id="clock">--:--:-- ET</span>
+          <span class="status-sub" id="statusSub"></span>
+        </div>
+
+        <div class="headline-stats">
+          <div class="hs">
+            <span class="hs-label">Equity</span>
+            <span class="hs-value" id="eqValue">—</span>
+          </div>
+          <div class="hs">
+            <span class="hs-label">Today</span>
+            <span class="hs-value" id="eqChange">—</span>
+          </div>
+        </div>
+
+        <button class="run-btn" id="runBtn" type="button">
+          <svg class="icon" aria-hidden="true"><use href="#i-play" id="runIcon" /></svg>
+          <span id="runBtnLabel">Start trading</span>
+        </button>
+      </header>
+
+      <nav class="tabs" id="tabs" aria-label="Sections">
+        <button type="button" class="tab is-active" data-view="dashboard">Dashboard</button>
+        <button type="button" class="tab" data-view="watchlist">Watchlist</button>
+        <button type="button" class="tab" data-view="strategies">Strategies</button>
+        <button type="button" class="tab" data-view="history">History</button>
+        <button type="button" class="tab" data-view="settings">Settings</button>
+        <span class="tab-spacer"></span>
+        <span class="paper-badge">Paper money</span>
+      </nav>
       </div>
-      <div class="rail-foot">
-        <button class="connection-chip" data-action="connection"><span class="connection-icon" data-icon="activity"></span><span><strong id="railSource">Replay feed</strong><small id="railStatus">Synthetic prices</small></span><span data-icon="chevron"></span></button>
-        <div class="rail-disclaimer">Paper trading only · v3.0</div>
-      </div>
-    </aside>
-    <main id="main">
-      <div class="page-head">
-        <div><div class="eyebrow screen-label"><span></span><b id="screenLabel">WORKSPACE / OVERVIEW</b></div><h1 id="title">Trading dashboard</h1><p id="subtitle">Monitor setups, manage risk, and put your strategies to the test.</p></div>
-        <div id="viewControls" class="head-controls"></div>
-      </div>
-      <div id="notice" class="notice" hidden></div>
-      <section id="overview" class="view" aria-label="Overview">
-        <div id="stats" class="stats"></div>
-        <div class="primary">
-          <article class="panel chart-panel">
-            <div class="chart-top">
-              <div class="symbol-line"><div class="symbol-icon" id="symbolIcon">NV</div><div><h2 id="chartSymbol">NVDA</h2><p class="subtle" id="chartCompany">NVIDIA</p></div></div>
-              <div class="chart-options"><div class="segment" id="ranges" aria-label="Chart time window"><button data-range="30">30m</button><button data-range="60" aria-pressed="true">1h</button><button data-range="0">All</button></div><button class="icon-btn chart-view-btn" aria-label="Toggle price chart style" data-action="chart-style" title="Toggle candles or line"><span data-icon="candles"></span></button></div>
+
+      <main class="main">
+        <!-- ---------------------------------------------------------- DASHBOARD -->
+        <section class="view is-active" data-view="dashboard">
+          <div class="grid-dash">
+            <div class="col-main">
+              <div class="panel">
+                <div class="panel-head">
+                  <h2>Account</h2>
+                  <span class="panel-note" id="accountNote"></span>
+                </div>
+                <div class="stats">
+                  <div class="stat"><span class="stat-label">Equity</span><span class="stat-value" id="statEquity">—</span><span class="stat-sub" id="statEquitySub"></span></div>
+                  <div class="stat"><span class="stat-label">Day P&amp;L</span><span class="stat-value" id="statDayPnl">—</span><span class="stat-sub" id="statDayPnlSub"></span></div>
+                  <div class="stat"><span class="stat-label">Open P&amp;L</span><span class="stat-value" id="statOpenPnl">—</span><span class="stat-sub" id="statOpenPnlSub"></span></div>
+                  <div class="stat"><span class="stat-label">Realized</span><span class="stat-value" id="statRealized">—</span><span class="stat-sub" id="statRealizedSub"></span></div>
+                  <div class="stat"><span class="stat-label">Win rate</span><span class="stat-value" id="statWinRate">—</span><span class="stat-sub" id="statWinRateSub"></span></div>
+                  <div class="stat"><span class="stat-label">Profit factor</span><span class="stat-value" id="statProfitFactor">—</span><span class="stat-sub" id="statProfitFactorSub"></span></div>
+                  <div class="stat"><span class="stat-label">Max drawdown</span><span class="stat-value" id="statMaxDD">—</span><span class="stat-sub" id="statMaxDDSub"></span></div>
+                  <div class="stat"><span class="stat-label">Exposure</span><span class="stat-value" id="statExposure">—</span><span class="stat-sub" id="statExposureSub"></span></div>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-head">
+                  <h2>Equity curve</h2>
+                  <span class="panel-note" id="equityLegend"></span>
+                </div>
+                <div class="chart-wrap">
+                  <canvas id="equityChart" aria-label="Equity curve"></canvas>
+                  <div class="chart-empty" id="chartEmpty">Your equity curve appears once the bot starts sampling.</div>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-head">
+                  <h2>Open positions <span class="count" id="positionsCount">0</span></h2>
+                  <button class="ghost-btn" id="closeAllBtn" type="button">Close all</button>
+                </div>
+                <div class="table-wrap">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>Symbol</th>
+                        <th>Side</th>
+                        <th class="num">Qty</th>
+                        <th class="num">Entry</th>
+                        <th class="num">Last</th>
+                        <th class="num">P&amp;L</th>
+                        <th class="num">Stop</th>
+                        <th class="num">Target</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody id="positionsBody"></tbody>
+                  </table>
+                  <div class="empty" id="positionsEmpty">
+                    <svg class="empty-icon" aria-hidden="true"><use href="#i-shield" /></svg>
+                    <strong>No open positions</strong>
+                    <span>The bot is flat. When a setup clears the score threshold it will open a paper trade here.</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-head">
+                  <h2>Activity</h2>
+                  <button class="ghost-btn" id="clearLogsBtn" type="button">Clear</button>
+                </div>
+                <ul class="activity" id="activityList"></ul>
+              </div>
             </div>
-            <div class="quote-head" id="quoteHead"></div>
-            <div class="chart-box" id="chart" aria-label="Selected symbol price chart"></div>
-            <div class="chart-footer"><span class="chart-source" id="chartSource"><i></i> Synthetic replay · 1-minute bars</span><div class="chart-toggles"><button data-action="volume" aria-pressed="true"><i></i> Volume</button><button data-action="fills" aria-pressed="true"><i></i> Fills</button></div></div>
-          </article>
-          <article class="panel watch-panel">
-            <div class="panel-header"><div><h2>Watchlist</h2><p>Scanner universe</p></div><button class="icon-btn" data-action="add" aria-label="Add symbol" title="Add symbol"><span data-icon="plus"></span></button></div>
-            <div class="watch-scroll"><table class="watch-table"><thead><tr><th>Symbol</th><th>Price</th><th>Change</th></tr></thead><tbody id="watchRows"></tbody></table></div>
-            <button class="watch-link" data-page="watchlist">View full watchlist <span data-icon="arrow-right"></span></button>
-          </article>
-        </div>
-        <div class="lower">
-          <article class="panel positions"><div class="panel-header"><div><h2>Open positions <span class="count" id="positionCount">0</span></h2><p id="positionSub">Current paper holdings</p></div><button class="text-button" data-page="journal">View journal <span data-icon="chevron"></span></button></div><div id="positions"></div></article>
-          <article class="panel decisions"><div class="panel-header"><div><h2>Decision feed</h2><p>Why the engine acted or passed</p></div><span class="status-tag" id="activityStatus"><i></i> READY</span></div><div id="decisions"></div></article>
-        </div>
-      </section>
-      <section id="watchlist" class="view" aria-label="Watchlist" hidden></section>
-      <section id="strategies" class="view" aria-label="Strategies" hidden></section>
-      <section id="journal" class="view" aria-label="Trade journal" hidden></section>
-      <footer class="footer"><span>AFTERBELL / PAPER TRADING</span><span>Simulated fills. No brokerage orders.</span></footer>
-    </main>
-  </div>
-  <dialog id="modal" aria-labelledby="modalTitle"></dialog>
-  <div id="toast" role="status" hidden></div>
-<script data-pplx-inline-edit>
-(function () {
-  if (window === window.top) return;
 
-  const allowedParentOrigins = ["https://www.perplexity.ai","https://perplexity.ai","https://testing.perplexity.ai","https://staging.perplexity.ai","https://*.preview.i.perplexity.ai","http://perplexity.localhost","http://localhost:1420","http://127.0.0.1:1420","http://localhost:3000","http://127.0.0.1:3000","http://localhost:5173","http://127.0.0.1:5173"];
-  const MAX_FONT_BYTES = 500 * 1024;
-  const MAX_TOTAL_FONT_BYTES = 2 * 1024 * 1024;
-  const DEFAULT_LINE_HEIGHT = 16;
-  let scrollForwarding = false;
-  let scrollRaf = 0;
-  let trustedTopOrigin = null;
+            <aside class="col-side">
+              <div class="panel">
+                <div class="panel-head"><h2>Bot status</h2></div>
+                <div class="bot-hint" id="botHint">Loading market data…</div>
+                <div class="mini-stats" id="miniStats"></div>
+              </div>
 
-  // Allow entries like "https://*.preview.i.perplexity.ai" — the wildcard
-  // matches a single DNS label (no dots), so "https://*.foo" cannot stretch
-  // across multiple labels.
-  function matchesAllowedOrigin(origin) {
-    if (!origin) return false;
-    for (const entry of allowedParentOrigins) {
-      if (!entry.includes("*")) {
-        if (entry === origin) return true;
-        continue;
-      }
-      const pattern = new RegExp(
-        "^" +
-          entry.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^.]+") +
-          "$",
-      );
-      if (pattern.test(origin)) return true;
-    }
-    return false;
-  }
+              <div class="panel">
+                <div class="panel-head">
+                  <h2>Watchlist</h2>
+                  <button class="link" type="button" data-jump="watchlist">Manage</button>
+                </div>
+                <ul class="mini-watch" id="miniWatch"></ul>
+              </div>
 
-  // Trust decision: when the sender is same-origin-visible (event.origin is a
-  // real origin like https://www.perplexity.ai) we trust event.origin directly.
-  // When event.origin is "null" (opaque broker srcdoc), we fall back to the
-  // broker's stamped `parentOrigin` to identify the top window. The fallback
-  // is claim-only — we rely on the browser's native `targetOrigin` enforcement
-  // on the response path (see postToTrustedTop) to ensure replies can't be
-  // delivered to anyone but the actual top window of that claimed origin.
-  function getTrustedParentOrigin(event) {
-    const forwardedParentOrigin =
-      typeof event.data.parentOrigin === "string" ? event.data.parentOrigin : null;
-    const parentOrigin = event.origin === "null" ? forwardedParentOrigin : event.origin;
-    return matchesAllowedOrigin(parentOrigin) ? parentOrigin : null;
-  }
+              <div class="panel">
+                <div class="panel-head">
+                  <h2>Top signals</h2>
+                  <span class="panel-note" id="signalNote"></span>
+                </div>
+                <ul class="signal-list" id="signalList"></ul>
+              </div>
+            </aside>
+          </div>
+        </section>
 
-  // All responses go to window.top with targetOrigin = the allowlisted origin.
-  // An attacker that iframes us inside their own null-origin broker can claim
-  // any parentOrigin they like, but the browser will drop the reply whenever
-  // the real top's origin doesn't match — so the screenshot never leaves.
-  function postToTrustedTop(message) {
-    if (!trustedTopOrigin) return;
-    try {
-      window.top.postMessage(message, trustedTopOrigin);
-    } catch (_error) {}
-  }
+        <!-- ---------------------------------------------------------- WATCHLIST -->
+        <section class="view" data-view="watchlist">
+          <div class="panel">
+            <div class="panel-head wrap">
+              <h2>Watchlist <span class="count" id="watchCount">0</span></h2>
+              <form class="add-form" id="watchForm" autocomplete="off">
+                <svg class="icon" aria-hidden="true"><use href="#i-search" /></svg>
+                <input
+                  id="watchInput"
+                  name="symbol"
+                  placeholder="Add ticker, e.g. NFLX"
+                  maxlength="8"
+                  spellcheck="false"
+                  autocomplete="off"
+                  aria-label="Ticker symbol"
+                />
+                <button type="submit">Add</button>
+              </form>
+            </div>
+            <p class="panel-note">
+              Toggle a symbol off to stop new entries in it. Open positions keep their stops either way.
+            </p>
+            <div class="table-wrap">
+              <table class="data-table watch-table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th class="num">Last</th>
+                    <th class="num">Change</th>
+                    <th>Trend</th>
+                    <th>Signal</th>
+                    <th class="center">Scanning</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="watchBody"></tbody>
+              </table>
+              <div class="empty" id="watchEmpty">
+                <svg class="empty-icon" aria-hidden="true"><use href="#i-plus" /></svg>
+                <strong>Watchlist is empty</strong>
+                <span>Add a ticker above to start scanning it.</span>
+              </div>
+            </div>
+          </div>
 
-  const PICK_CAPABILITIES = ["pick"];
-  const PICK_CHAIN_LENGTH = 4;
-  const PICK_MAX_TEXT_CHARS = 120;
-  const PICK_MAX_HTML_CHARS = 300;
+          <div class="panel">
+            <div class="panel-head">
+              <h2>Signal board</h2>
+              <span class="panel-note" id="boardNote"></span>
+            </div>
+            <div class="signal-board" id="signalBoard"></div>
+          </div>
+        </section>
 
-  function truncate(value, maxChars) {
-    return value.length > maxChars ? value.slice(0, maxChars - 1) + "…" : value;
-  }
+        <!-- --------------------------------------------------------- STRATEGIES -->
+        <section class="view" data-view="strategies">
+          <div class="panel">
+            <div class="panel-head wrap">
+              <h2>Strategy library</h2>
+              <div class="btn-row">
+                <button class="ghost-btn" id="stratAllOn" type="button">Enable all</button>
+                <button class="ghost-btn" id="stratAllOff" type="button">Disable all</button>
+              </div>
+            </div>
+            <p class="panel-note">
+              Every setup is scored 0–99. A trade only opens when the score clears your threshold in Settings.
+              Longs and shorts use the same risk budget.
+            </p>
+            <div class="strategy-grid" id="strategyGrid"></div>
+          </div>
+        </section>
 
-  function isPickableElement(element) {
-    return (
-      element instanceof Element &&
-      element !== document.documentElement &&
-      element !== document.body
-    );
-  }
+        <!-- ------------------------------------------------------------- HISTORY -->
+        <section class="view" data-view="history">
+          <div class="panel">
+            <div class="panel-head wrap">
+              <h2>Trade history</h2>
+              <div class="btn-row">
+                <button class="ghost-btn" id="exportCsv" type="button">
+                  <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg> Export CSV
+                </button>
+                <button class="ghost-btn" id="exportJson" type="button">Backup JSON</button>
+              </div>
+            </div>
+            <div class="history-summary" id="historySummary"></div>
+            <div class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Closed</th>
+                    <th>Symbol</th>
+                    <th>Side</th>
+                    <th class="num">Qty</th>
+                    <th class="num">Entry</th>
+                    <th class="num">Exit</th>
+                    <th class="num">P&amp;L</th>
+                    <th class="num">%</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody id="historyBody"></tbody>
+              </table>
+              <div class="empty" id="historyEmpty">
+                <svg class="empty-icon" aria-hidden="true"><use href="#i-clock" /></svg>
+                <strong>No closed trades yet</strong>
+                <span>Completed round-trips will be listed here with their exit reason.</span>
+              </div>
+            </div>
+          </div>
+        </section>
 
-  function resolvePickTarget(x, y) {
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    const element = document.elementFromPoint(x, y);
-    return isPickableElement(element) ? element.closest("svg") || element : null;
-  }
+        <!-- ------------------------------------------------------------ SETTINGS -->
+        <section class="view" data-view="settings">
+          <div id="settingsRoot"></div>
+        </section>
+      </main>
 
-  function pickLabel(element) {
-    if (element.id) return element.localName + "#" + element.id;
-    return [element.localName].concat(Array.from(element.classList).slice(0, 2)).join(".");
-  }
+      <footer class="footer">
+        <span>YANAI TRADING · simulated paper account. No orders are ever sent to a broker.</span>
+        <span id="footFeed">Data: CNBC public quotes &amp; 1-minute bars · refreshes automatically</span>
+      </footer>
+    </div>
 
-  // Only attributes that help find the element in source. data-* values and URL
-  // query strings or fragments can carry tokens.
-  const PICK_ATTRIBUTES = new Set([
-    "id",
-    "class",
-    "name",
-    "type",
-    "role",
-    "alt",
-    "aria-label",
-    "href",
-    "src",
-  ]);
+    <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+    <div class="modal-root" id="modalRoot"></div>
 
-  function pickAttributeValue(attribute) {
-    return attribute.name === "href" || attribute.name === "src"
-      ? attribute.value.split(/[?#]/)[0]
-      : attribute.value;
-  }
+    <noscript>
+      <div class="noscript">YANAI TRADING needs JavaScript enabled to stream market data.</div>
+    </noscript>
 
-  function describePickElement(element) {
-    const chain = [];
-    for (
-      let current = element;
-      isPickableElement(current) && chain.length < PICK_CHAIN_LENGTH;
-      current = current.parentElement
-    ) {
-      chain.unshift(current);
-    }
-    const attributes = Array.from(element.attributes)
-      .filter((attribute) => PICK_ATTRIBUTES.has(attribute.name))
-      .map((attribute) => ` ${attribute.name}="${pickAttributeValue(attribute).replace(/"/g, "&quot;")}"`)
-      .join("");
-    const text = (element.innerText || element.textContent || "").replace(/\s+/g, " ").trim();
-    return {
-      chain: chain.map(pickLabel),
-      html: truncate(`<${element.localName}${attributes}>`, PICK_MAX_HTML_CHARS),
-      text: text ? truncate(text, PICK_MAX_TEXT_CHARS) : undefined,
-    };
-  }
-
-  // Hover asks once per frame, and innerText on a large section forces layout,
-  // so only the rect is re-read while the pointer stays on the same element.
-  // Clicks ask for fresh details since the page may have changed the element.
-  let lastPick = null;
-
-  function describePickTarget(element, fresh) {
-    if (fresh || lastPick?.element !== element) {
-      lastPick = { element, details: describePickElement(element) };
-    }
-    const rect = element.getBoundingClientRect();
-    return {
-      rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
-      ...lastPick.details,
-    };
-  }
-
-  function inlineAll(original, clone) {
-    if (original.nodeType !== 1 || clone.nodeType !== 1) return;
-
-    try {
-      const computedStyle = getComputedStyle(original);
-      // cssText on a computed style is the serialized declaration in modern
-      // Chromium/Safari — a single read beats enumerating ~400 longhand
-      // properties. Firefox returns "" here, so we fall back on empty.
-      const serialized = computedStyle.cssText;
-      if (serialized) {
-        clone.style.cssText = serialized;
-      } else {
-        const parts = new Array(computedStyle.length);
-        for (let index = 0; index < computedStyle.length; index += 1) {
-          const property = computedStyle[index];
-          parts[index] = `${property}:${computedStyle.getPropertyValue(property)};`;
-        }
-        clone.style.cssText = parts.join("");
-      }
-    } catch (_error) {}
-
-    const originalChildren = original.children;
-    const clonedChildren = clone.children;
-    for (
-      let index = 0;
-      index < originalChildren.length && index < clonedChildren.length;
-      index += 1
-    ) {
-      inlineAll(originalChildren[index], clonedChildren[index]);
-    }
-  }
-
-  function extractFontUrl(srcValue) {
-    const matches = [
-      ...srcValue.matchAll(
-        /url\(["']?([^"')]+)["']?\)(?:\s*format\(["']?([^"')]+)["']?\))?/gi,
-      ),
-    ];
-    if (matches.length === 0) return null;
-    const woff2 = matches.find((m) => m[2] && m[2].toLowerCase().includes("woff2"));
-    if (woff2) return woff2[1];
-    const woff = matches.find((m) => m[2] && m[2].toLowerCase().includes("woff"));
-    if (woff) return woff[1];
-    return matches[0][1];
-  }
-
-  // Cache resolved font URL -> data URI across captures. Fonts on a page
-  // essentially never change, and a batch run emits multiple captures back to
-  // back — without this we'd refetch + re-base64 every time.
-  const fontDataUriCache = new Map();
-  const SRC_DECLARATION_RE = /src\s*:\s*[^;}]+/i;
-
-  async function fetchAsDataUri(url) {
-    if (fontDataUriCache.has(url)) return fontDataUriCache.get(url);
-    let dataUri = null;
-    try {
-      const response = await fetch(url, { mode: "cors", credentials: "omit" });
-      if (response.ok) {
-        const blob = await response.blob();
-        if (blob.size <= MAX_FONT_BYTES) {
-          dataUri = await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () =>
-              resolve(typeof reader.result === "string" ? reader.result : null);
-            reader.onerror = () => resolve(null);
-            reader.readAsDataURL(blob);
-          });
-        }
-      }
-    } catch (_error) {
-      dataUri = null;
-    }
-    fontDataUriCache.set(url, dataUri);
-    return dataUri;
-  }
-
-  function collectFontFaceRuleTexts() {
-    const rules = [];
-    for (const sheet of document.styleSheets) {
-      let cssRules;
-      try {
-        cssRules = sheet.cssRules;
-      } catch (_error) {
-        continue;
-      }
-      if (!cssRules) continue;
-      for (const rule of cssRules) {
-        const cssText = rule.cssText || "";
-        if (cssText.startsWith("@font-face")) rules.push(cssText);
-      }
-    }
-    return rules;
-  }
-
-  async function buildInlinedFontCss() {
-    const ruleTexts = collectFontFaceRuleTexts();
-    if (ruleTexts.length === 0) return null;
-
-    const resolved = ruleTexts.map((cssText) => {
-      if (!SRC_DECLARATION_RE.test(cssText)) return null;
-      const srcMatch = cssText.match(/src\s*:\s*([^;}]+)[;}]/i);
-      if (!srcMatch) return null;
-      const url = extractFontUrl(srcMatch[1]);
-      if (!url) return null;
-      try {
-        return { cssText, url: new URL(url, document.baseURI).href };
-      } catch (_error) {
-        return null;
-      }
-    });
-
-    const dataUris = await Promise.all(
-      resolved.map((entry) => (entry ? fetchAsDataUri(entry.url) : Promise.resolve(null))),
-    );
-
-    const inlined = [];
-    let totalBytes = 0;
-    for (let index = 0; index < resolved.length; index += 1) {
-      const entry = resolved[index];
-      const dataUri = dataUris[index];
-      if (!entry || !dataUri) continue;
-      const approxBytes = dataUri.length * 0.75;
-      if (totalBytes + approxBytes > MAX_TOTAL_FONT_BYTES) break;
-      totalBytes += approxBytes;
-      inlined.push(entry.cssText.replace(SRC_DECLARATION_RE, `src: url("${dataUri}")`));
-    }
-    return inlined.length > 0 ? inlined.join("\n") : null;
-  }
-
-  function stripExternal(clone) {
-    const images = clone.querySelectorAll("img");
-    for (let index = 0; index < images.length; index += 1) {
-      const src = images[index].getAttribute("src");
-      if (src && !src.startsWith("data:")) images[index].removeAttribute("src");
-    }
-
-    const elements = clone.querySelectorAll("*");
-    for (let index = 0; index < elements.length; index += 1) {
-      const style = elements[index].style.cssText;
-      if (style && style.includes("url(")) {
-        elements[index].style.cssText = style.replace(
-          /url\(["']?(?!data:)[^)"']*["']?\)/gi,
-          "none",
-        );
-      }
-    }
-  }
-
-  function emitScroll() {
-    scrollRaf = 0;
-    if (!scrollForwarding) return;
-    postToTrustedTop({
-      type: "INLINE_EDIT_SCROLL",
-      scrollX: window.scrollX,
-      scrollY: window.scrollY,
-      capabilities: PICK_CAPABILITIES,
-    });
-  }
-
-  window.addEventListener(
-    "scroll",
-    function () {
-      if (!scrollForwarding || scrollRaf) return;
-      scrollRaf = requestAnimationFrame(emitScroll);
-    },
-    { passive: true, capture: true },
-  );
-
-  async function handleCaptureRequest(event) {
-    const requestId = event.data.requestId;
-    const scrollX = window.scrollX;
-    const scrollY = window.scrollY;
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-
-    function postResult(dataUrl) {
-      postToTrustedTop({
-        type: "INLINE_EDIT_SCREENSHOT_RESULT",
-        requestId,
-        dataUrl,
-        scrollX,
-        scrollY,
-      });
-    }
-
-    try {
-      // Wait for any pending web fonts to resolve so both inline metrics and
-      // the @font-face inlining below see the same loaded faces.
-      if (document.fonts && document.fonts.ready) {
-        try {
-          await document.fonts.ready;
-        } catch (_error) {}
-      }
-
-      const clone = document.documentElement.cloneNode(true);
-      inlineAll(document.documentElement, clone);
-
-      const removedNodes = clone.querySelectorAll("script,link[rel=\"stylesheet\"],style");
-      for (let index = 0; index < removedNodes.length; index += 1) {
-        removedNodes[index].remove();
-      }
-
-      stripExternal(clone);
-
-      // Re-embed web fonts as data-URI @font-face rules so the SVG rasterizer
-      // can resolve them — external font URLs aren't fetched during
-      // foreignObject rendering, which would otherwise force a fallback face
-      // and change text metrics.
-      const inlinedFontCss = await buildInlinedFontCss();
-      if (inlinedFontCss) {
-        const styleEl = document.createElement("style");
-        styleEl.textContent = inlinedFontCss;
-        const head = clone.querySelector("head");
-        if (head) head.appendChild(styleEl);
-        else clone.insertBefore(styleEl, clone.firstChild);
-      }
-
-      const html = new XMLSerializer().serializeToString(clone);
-      const svg =
-        `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">` +
-        '<foreignObject width="100%" height="100%">' +
-        `<div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;height:${height}px;overflow:hidden">` +
-        `<div style="position:relative;left:-${scrollX}px;top:-${scrollY}px">` +
-        html +
-        "</div></div></foreignObject></svg>";
-      const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-      const image = new Image();
-      image.onload = function () {
-        const canvas = document.createElement("canvas");
-        canvas.width = width;
-        canvas.height = height;
-        canvas.getContext("2d").drawImage(image, 0, 0);
-        postResult(canvas.toDataURL("image/png"));
-      };
-      image.onerror = function () {
-        postResult(null);
-      };
-      image.src = svgUrl;
-    } catch (_error) {
-      postResult(null);
-    }
-  }
-
-  window.addEventListener("message", function (event) {
-    if (!event.data) return;
-    // Only accept messages from the direct parent frame. Blocks sibling /
-    // unrelated-window postMessage senders that could otherwise reach us.
-    if (event.source !== window.parent) return;
-
-    const trustedParentOrigin = getTrustedParentOrigin(event);
-    if (!trustedParentOrigin) return;
-    trustedTopOrigin = trustedParentOrigin;
-
-    if (event.data.type === "INLINE_EDIT_PICK") {
-      const element = resolvePickTarget(event.data.x, event.data.y);
-      postToTrustedTop({
-        type: "INLINE_EDIT_PICK_RESULT",
-        seq: event.data.seq,
-        target: element ? describePickTarget(element, event.data.fresh === true) : null,
-      });
-      return;
-    }
-
-    if (event.data.type === "INLINE_EDIT_SCROLL_START") {
-      scrollForwarding = true;
-      emitScroll();
-      return;
-    }
-
-    if (event.data.type === "INLINE_EDIT_SCROLL_STOP") {
-      scrollForwarding = false;
-      if (scrollRaf) cancelAnimationFrame(scrollRaf);
-      scrollRaf = 0;
-      return;
-    }
-
-    if (event.data.type === "INLINE_EDIT_SCROLL_BY") {
-      const { deltaX, deltaY, deltaMode } = event.data;
-      if (!scrollForwarding || !Number.isFinite(deltaX) || !Number.isFinite(deltaY)) return;
-      if (deltaMode !== 0 && deltaMode !== 1 && deltaMode !== 2) return;
-      const lineHeight =
-        parseFloat(getComputedStyle(document.documentElement).lineHeight) || DEFAULT_LINE_HEIGHT;
-      const scaleX = deltaMode === 1 ? lineHeight : deltaMode === 2 ? window.innerWidth : 1;
-      const scaleY = deltaMode === 1 ? lineHeight : deltaMode === 2 ? window.innerHeight : 1;
-      // The selection overlay receives the wheel event instead of this iframe.
-      // Instant scrolling preserves trackpad deltas even on smooth-scroll sites.
-      window.scrollBy({ left: deltaX * scaleX, top: deltaY * scaleY, behavior: "instant" });
-      emitScroll();
-      return;
-    }
-
-    if (event.data.type !== "INLINE_EDIT_CAPTURE_REQUEST") return;
-
-    handleCaptureRequest(event);
-  });
-})();
-
-
-</script></body>
+    <script type="module" src="app.js"></script>
+  </body>
 </html>
