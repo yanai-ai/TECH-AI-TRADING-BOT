@@ -1,4 +1,5 @@
 # YANAI TRADING
+# https://yanai-ai.github.io/TECH-AI-TRADING-BOT/
 
 A browser-based **paper trading terminal** that trades real US market prices with long and short
 intraday strategies. It runs entirely in your browser — no backend, no API key, no sign-up — so it
