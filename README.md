@@ -9,29 +9,7 @@ can be hosted for free on GitHub Pages.
 
 ---
 
-## Quick start
-
-### Run it locally
-
-ES modules need to be served over HTTP, so opening `index.html` directly from disk will not work.
-
-```bash
-cd "Yanai Trading"
-python -m http.server 8000
-```
-
-Then open <http://localhost:8000>.
-
-### Publish it on GitHub Pages
-
-1. Create a repository and upload every file in this folder to the **root** of the default branch
-   (`index.html`, `style.css`, and the `.js` files).
-2. In the repository, go to **Settings → Pages**.
-3. Under **Build and deployment**, choose **Deploy from a branch** → branch `main` → folder `/ (root)`
-   → **Save**.
-4. After a minute, open `https://<your-username>.github.io/<repo-name>/`.
-
-There is no build step. The site is plain HTML, CSS and ES modules.
+https://yanai-ai.github.io/TECH-AI-TRADING-BOT/
 
 ---
 
